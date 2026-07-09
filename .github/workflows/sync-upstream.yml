@@ -1,0 +1,117 @@
+name: Sync upstream
+
+on:
+  schedule:
+    # Every day at 04:00 UTC.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+env:
+  UPSTREAM: https://github.com/gomuks/gomuks.git
+  # The branch carrying local patches on top of upstream main.
+  FEATURE_BRANCH: reaction-notifications
+  GOTOOLCHAIN: local
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    name: Sync main and rebase ${{ github.ref_name }}
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "$UPSTREAM"
+          git fetch upstream main
+          git fetch origin main "$FEATURE_BRANCH"
+
+      - name: Fast-forward main
+        id: ff
+        run: |
+          git checkout main
+          if git merge-base --is-ancestor main upstream/main; then
+            if [ "$(git rev-parse main)" = "$(git rev-parse upstream/main)" ]; then
+              echo "main is already up to date"
+              echo "updated=false" >> "$GITHUB_OUTPUT"
+            else
+              git merge --ff-only upstream/main
+              git push origin main
+              echo "updated=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "::error::main has diverged from upstream, refusing to fast-forward"
+            echo "diverged=true" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Rebase feature branch onto main
+        id: rebase
+        if: steps.ff.outputs.updated == 'true'
+        run: |
+          git checkout -B "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH"
+          if git rebase main; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+          else
+            git rebase --abort
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Rebase of $FEATURE_BRANCH onto main conflicts"
+          fi
+
+      - name: Set up Go
+        if: steps.rebase.outputs.clean == 'true'
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Verify the rebased branch
+        id: verify
+        if: steps.rebase.outputs.clean == 'true'
+        continue-on-error: true
+        run: |
+          mkdir -p web/dist && touch web/dist/empty
+          go build -tags "sqlite_fts5 goolm" ./...
+          go test -tags "sqlite_fts5 goolm" ./...
+          rm -f web/dist/empty
+
+      - name: Push the rebased branch
+        if: steps.rebase.outputs.clean == 'true' && steps.verify.outcome == 'success'
+        run: |
+          git push --force-with-lease origin "$FEATURE_BRANCH"
+
+      - name: Open an issue if the sync needs a human
+        if: failure() || steps.rebase.outputs.clean == 'false' || steps.verify.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Upstream sync needs attention"
+          if gh issue list --state open --search "$title in:title" --json title -q '.[].title' | grep -qxF "$title"; then
+            echo "An issue is already open, not filing another one"
+            exit 0
+          fi
+          if [ "${{ steps.ff.outputs.diverged }}" = "true" ]; then
+            reason='`main` has diverged from upstream and cannot be fast-forwarded.'
+          elif [ "${{ steps.rebase.outputs.clean }}" = "false" ]; then
+            reason="Rebasing \`$FEATURE_BRANCH\` onto the new \`main\` hit conflicts."
+          else
+            reason="\`$FEATURE_BRANCH\` rebased cleanly, but the build or tests failed against the new \`main\`."
+          fi
+          {
+            printf '%s\n\n' "$reason"
+            printf '`%s` was left untouched. Resolve it locally:\n\n' "$FEATURE_BRANCH"
+            printf '```sh\ngit fetch origin\ngit rebase origin/main %s\n```\n\n' "$FEATURE_BRANCH"
+            printf '[Workflow run](%s)\n' "$RUN_URL"
+          } > /tmp/issue-body.md
+          gh issue create --title "$title" --body-file /tmp/issue-body.md
