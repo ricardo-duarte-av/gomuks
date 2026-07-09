@@ -1,0 +1,8 @@
+web/node_modules
+web/dist
+desktop/node_modules
+desktop/out
+.cache
+gomuks
+gomuks-terminal
+gomuks.exe
