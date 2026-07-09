@@ -29,6 +29,7 @@ import {
 	EventsDecryptedData,
 	ImagePackRooms,
 	MemDBEvent,
+	RelatesTo,
 	RoomID,
 	RoomStateGUID,
 	SendCompleteData,
@@ -661,9 +662,42 @@ export class StateStore {
 		return this.#frequentlyUsedEmoji
 	}
 
+	#reactionNotificationBody(room: RoomStateStore, evt: MemDBEvent): string | null {
+		const relatesTo = evt.content["m.relates_to"] as RelatesTo | undefined
+		if (!relatesTo?.key || !relatesTo.event_id) {
+			return null
+		}
+		// Custom emoji reactions use an mxc:// URI as the key, which isn't worth showing as-is.
+		const key = relatesTo.key.startsWith("mxc://") ? "with a custom emoji" : relatesTo.key
+		const target = room.eventsByID.get(relatesTo.event_id)
+		const fallback = target?.sender === this.userID ? "your message" : "a message"
+		let targetBody = target?.content.body
+		if (typeof targetBody !== "string" || !targetBody) {
+			return `Reacted ${key} to ${fallback}`
+		}
+		if (targetBody.length > 80) {
+			targetBody = targetBody.slice(0, 80) + "…"
+		}
+		return `Reacted ${key} to "${targetBody}"`
+	}
+
 	showNotification(room: RoomStateStore, rowid: EventRowID, sound: boolean) {
 		const evt = room.eventsByRowID.get(rowid)
-		if (!evt || typeof evt.content.body !== "string") {
+		if (!evt) {
+			return
+		}
+		let body: string | null
+		if (evt.type === "m.reaction") {
+			body = this.#reactionNotificationBody(room, evt)
+		} else if (typeof evt.content.body === "string") {
+			body = evt.content.body
+			if (body.length > 400) {
+				body = body.slice(0, 350) + " […]"
+			}
+		} else {
+			body = null
+		}
+		if (body === null) {
 			return
 		}
 		if (sound) {
@@ -672,10 +706,6 @@ export class StateStore {
 		if (window.gomuksDesktop?.getDisableNotifications()) {
 			// Notifications are sent by the main process
 			return
-		}
-		let body = evt.content.body
-		if (body.length > 400) {
-			body = body.slice(0, 350) + " […]"
 		}
 		const memberEvt = room.getStateEvent("m.room.member", evt.sender)
 		const icon = `${getAvatarThumbnailURL(evt.sender, memberEvt?.content)}&image_auth=${this.imageAuthToken}`
