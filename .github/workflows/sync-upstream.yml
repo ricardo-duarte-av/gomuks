@@ -41,7 +41,8 @@ jobs:
       - name: Fast-forward main
         id: ff
         run: |
-          git checkout main
+          # Plain `git checkout main` is ambiguous once upstream/main exists.
+          git checkout -B main origin/main
           if git merge-base --is-ancestor main upstream/main; then
             if [ "$(git rev-parse main)" = "$(git rev-parse upstream/main)" ]; then
               echo "main is already up to date"
