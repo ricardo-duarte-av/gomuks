@@ -134,46 +134,8 @@ func (gmx *Gomuks) getNotificationUser(ctx context.Context, roomID id.RoomID, us
 	return
 }
 
-func (gmx *Gomuks) formatPushNotificationMessage(ctx context.Context, notif jsoncmd.SyncNotification) *PushNewMessage {
-	evtType := notif.Event.Type
-	rawContent := notif.Event.Content
-	if evtType == event.EventEncrypted.Type {
-		evtType = notif.Event.DecryptedType
-		rawContent = notif.Event.Decrypted
-	}
-	if evtType != event.EventMessage.Type && evtType != event.EventSticker.Type {
-		return nil
-	}
-	var content event.MessageEventContent
-	err := json.Unmarshal(rawContent, &content)
-	if err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).
-			Stringer("event_id", notif.Event.ID).
-			Msg("Failed to unmarshal message content to format push notification")
-		return nil
-	}
-	if evtType == event.EventSticker.Type {
-		content.MsgType = event.CapMsgSticker
-	}
-	var roomAvatar, image string
-	if notif.Room.Avatar != nil {
-		avatarIdent := notif.Room.ID.String()
-		if ptr.Val(notif.Room.DMUserID) != "" {
-			avatarIdent = notif.Room.DMUserID.String()
-		}
-		roomAvatar = getAvatarLinkForNotification(ptr.Val(notif.Room.Name), avatarIdent, notif.Room.Avatar.CUString())
-	}
-	roomName := ptr.Val(notif.Room.Name)
-	if roomName == "" {
-		roomName = "Unnamed room"
-	}
-	if len(roomName) > 50 {
-		roomName = roomName[:50] + "…"
-	}
+func messageBodyForNotification(content *event.MessageEventContent) string {
 	text := content.Body
-	if len(text) > 400 {
-		text = text[:350] + "[…]"
-	}
 	if content.MsgType.IsMedia() && (text == "" || content.FileName == "" || content.FileName == content.Body) {
 		switch content.MsgType {
 		case event.MsgImage:
@@ -195,6 +157,107 @@ func (gmx *Gomuks) formatPushNotificationMessage(ctx context.Context, notif json
 			}
 		}
 	}
+	return text
+}
+
+// reactionTargetPreviewLength is the maximum length of the reacted-to message quoted in a reaction notification.
+const reactionTargetPreviewLength = 80
+
+func reactionKeyForNotification(key string) string {
+	// Custom emoji reactions use an mxc:// URI as the key, which isn't worth showing as-is.
+	if strings.HasPrefix(key, "mxc://") {
+		return "with a custom emoji"
+	}
+	if utf8.RuneCountInString(key) > 16 {
+		return string([]rune(key)[:16]) + "…"
+	}
+	return key
+}
+
+func (gmx *Gomuks) formatReactionNotificationText(ctx context.Context, notif jsoncmd.SyncNotification, rawContent json.RawMessage) string {
+	var content event.ReactionEventContent
+	err := json.Unmarshal(rawContent, &content)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).
+			Stringer("event_id", notif.Event.ID).
+			Msg("Failed to unmarshal reaction content to format push notification")
+		return ""
+	}
+	if content.RelatesTo.Key == "" || content.RelatesTo.EventID == "" {
+		return ""
+	}
+	key := reactionKeyForNotification(content.RelatesTo.Key)
+	target, err := gmx.Client.DB.Event.GetByID(ctx, notif.Room.ID, content.RelatesTo.EventID)
+	if err != nil {
+		zerolog.Ctx(ctx).Err(err).
+			Stringer("event_id", content.RelatesTo.EventID).
+			Msg("Failed to get reaction target for push notification")
+	}
+	fallback := "a message"
+	if target != nil && target.Sender == gmx.Client.Account.UserID {
+		fallback = "your message"
+	}
+	if target == nil {
+		return fmt.Sprintf("Reacted %s to %s", key, fallback)
+	}
+	targetType := target.GetType().Type
+	if targetType != event.EventMessage.Type && targetType != event.EventSticker.Type {
+		return fmt.Sprintf("Reacted %s to %s", key, fallback)
+	}
+	var targetContent event.MessageEventContent
+	err = json.Unmarshal(target.GetContent(), &targetContent)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).
+			Stringer("event_id", target.ID).
+			Msg("Failed to unmarshal reaction target content to format push notification")
+		return fmt.Sprintf("Reacted %s to %s", key, fallback)
+	}
+	if targetType == event.EventSticker.Type {
+		targetContent.MsgType = event.CapMsgSticker
+	}
+	targetText := messageBodyForNotification(&targetContent)
+	if targetText == "" {
+		return fmt.Sprintf("Reacted %s to %s", key, fallback)
+	}
+	if utf8.RuneCountInString(targetText) > reactionTargetPreviewLength {
+		targetText = string([]rune(targetText)[:reactionTargetPreviewLength]) + "…"
+	}
+	return fmt.Sprintf("Reacted %s to %q", key, targetText)
+}
+
+func (gmx *Gomuks) formatPushNotificationMessage(ctx context.Context, notif jsoncmd.SyncNotification) *PushNewMessage {
+	evtType := notif.Event.Type
+	rawContent := notif.Event.Content
+	if evtType == event.EventEncrypted.Type {
+		evtType = notif.Event.DecryptedType
+		rawContent = notif.Event.Decrypted
+	}
+	if evtType == event.EventReaction.Type {
+		text := gmx.formatReactionNotificationText(ctx, notif, rawContent)
+		if text == "" {
+			return nil
+		}
+		return gmx.newPushNewMessage(ctx, notif, text, "", false, false)
+	}
+	if evtType != event.EventMessage.Type && evtType != event.EventSticker.Type {
+		return nil
+	}
+	var content event.MessageEventContent
+	err := json.Unmarshal(rawContent, &content)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).
+			Stringer("event_id", notif.Event.ID).
+			Msg("Failed to unmarshal message content to format push notification")
+		return nil
+	}
+	if evtType == event.EventSticker.Type {
+		content.MsgType = event.CapMsgSticker
+	}
+	var image string
+	text := messageBodyForNotification(&content)
+	if len(text) > 400 {
+		text = text[:350] + "[…]"
+	}
 	if content.MsgType == event.MsgImage || evtType == event.EventSticker.Type {
 		if content.File != nil && content.File.URL != "" {
 			parsed := content.File.URL.ParseOrIgnore()
@@ -207,6 +270,31 @@ func (gmx *Gomuks) formatPushNotificationMessage(ctx context.Context, notif json
 				image = fmt.Sprintf("_gomuks/media/%s/%s?encrypted=false", parsed.Homeserver, parsed.FileID)
 			}
 		}
+	}
+	return gmx.newPushNewMessage(
+		ctx, notif, text, image,
+		content.Mentions.Has(gmx.Client.Account.UserID),
+		content.RelatesTo.GetNonFallbackReplyTo() != "",
+	)
+}
+
+func (gmx *Gomuks) newPushNewMessage(
+	ctx context.Context, notif jsoncmd.SyncNotification, text, image string, mention, reply bool,
+) *PushNewMessage {
+	var roomAvatar string
+	if notif.Room.Avatar != nil {
+		avatarIdent := notif.Room.ID.String()
+		if ptr.Val(notif.Room.DMUserID) != "" {
+			avatarIdent = notif.Room.DMUserID.String()
+		}
+		roomAvatar = getAvatarLinkForNotification(ptr.Val(notif.Room.Name), avatarIdent, notif.Room.Avatar.CUString())
+	}
+	roomName := ptr.Val(notif.Room.Name)
+	if roomName == "" {
+		roomName = "Unnamed room"
+	}
+	if len(roomName) > 50 {
+		roomName = roomName[:50] + "…"
 	}
 	return &PushNewMessage{
 		Timestamp:  notif.Event.Timestamp,
@@ -221,8 +309,8 @@ func (gmx *Gomuks) formatPushNotificationMessage(ctx context.Context, notif json
 
 		Text:    text,
 		Image:   image,
-		Mention: content.Mentions.Has(gmx.Client.Account.UserID),
-		Reply:   content.RelatesTo.GetNonFallbackReplyTo() != "",
+		Mention: mention,
+		Reply:   reply,
 		Sound:   notif.Sound,
 	}
 }
