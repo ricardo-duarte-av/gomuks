@@ -29,6 +29,7 @@ import {
 	EventsDecryptedData,
 	ImagePackRooms,
 	MemDBEvent,
+	RelatesTo,
 	RoomID,
 	RoomStateGUID,
 	SendCompleteData,
@@ -664,9 +665,35 @@ export class StateStore {
 		return this.#frequentlyUsedEmoji
 	}
 
+	#reactionNotificationBody(room: RoomStateStore, evt: MemDBEvent): string | null {
+		const relatesTo = evt.content["m.relates_to"] as RelatesTo | undefined
+		if (!relatesTo?.key || !relatesTo.event_id) {
+			return null
+		}
+		// Custom emoji reactions use an mxc:// URI as the key, which isn't worth showing as-is.
+		const key = relatesTo.key.startsWith("mxc://") ? "with a custom emoji" : relatesTo.key
+		const target = room.eventsByID.get(relatesTo.event_id)
+		const fallback = target?.sender === this.userID ? "your message" : "a message"
+		let targetBody = target?.local_content?.preview_text
+		if (!targetBody) {
+			return `Reacted ${key} to ${fallback}`
+		}
+		if (targetBody.length > 80) {
+			targetBody = targetBody.slice(0, 80) + "…"
+		}
+		return `Reacted ${key} to "${targetBody}"`
+	}
+
 	showNotification(room: RoomStateStore, rowid: EventRowID, sound: boolean) {
 		const evt = room.eventsByRowID.get(rowid)
-		if (!evt || !evt.local_content?.preview_text) {
+		if (!evt) {
+			return
+		}
+		// Reactions don't get preview text generated for them, so format them here.
+		const body = evt.type === "m.reaction"
+			? this.#reactionNotificationBody(room, evt)
+			: evt.local_content?.preview_text
+		if (!body) {
 			return
 		}
 		if (sound) {
@@ -682,7 +709,7 @@ export class StateStore {
 		const senderName = getDisplayname(evt.sender, memberEvt?.content)
 		const title = senderName === roomName ? senderName : `${senderName} (${roomName})`
 		const notif = new Notification(title, {
-			body: evt.local_content?.preview_text,
+			body,
 			icon,
 			badge: "gomuks.png",
 			// timestamp: evt.timestamp,
