@@ -5,12 +5,20 @@ on:
     # Every day at 04:00 UTC.
     - cron: "0 4 * * *"
   workflow_dispatch:
+    inputs:
+      mirror_branch:
+        description: "Branch mirroring upstream main"
+        default: main
+      feature_branch:
+        description: "Branch carrying the local patches"
+        default: dev
 
 env:
   UPSTREAM: https://github.com/gomuks/gomuks.git
-  # The branch carrying local patches on top of upstream main. main itself is
-  # only ever fast-forwarded from upstream, so it stays a clean mirror.
-  FEATURE_BRANCH: dev
+  # The branch carrying local patches on top of upstream main. The mirror branch
+  # is only ever fast-forwarded from upstream, so it stays a clean mirror.
+  MIRROR_BRANCH: ${{ inputs.mirror_branch || 'main' }}
+  FEATURE_BRANCH: ${{ inputs.feature_branch || 'dev' }}
   GOTOOLCHAIN: local
 
 jobs:
@@ -36,39 +44,39 @@ jobs:
         run: |
           git remote add upstream "$UPSTREAM"
           git fetch upstream main
-          git fetch origin main "$FEATURE_BRANCH"
+          git fetch origin "$MIRROR_BRANCH" "$FEATURE_BRANCH"
 
-      - name: Fast-forward main
+      - name: Fast-forward the mirror branch
         id: ff
         run: |
-          # Plain `git checkout main` is ambiguous once upstream/main exists.
-          git checkout -B main origin/main
-          if git merge-base --is-ancestor main upstream/main; then
-            if [ "$(git rev-parse main)" = "$(git rev-parse upstream/main)" ]; then
-              echo "main is already up to date"
+          # A plain `git checkout main` is ambiguous once upstream/main exists.
+          git checkout -B "$MIRROR_BRANCH" "origin/$MIRROR_BRANCH"
+          if git merge-base --is-ancestor "$MIRROR_BRANCH" upstream/main; then
+            if [ "$(git rev-parse "$MIRROR_BRANCH")" = "$(git rev-parse upstream/main)" ]; then
+              echo "$MIRROR_BRANCH is already up to date"
               echo "updated=false" >> "$GITHUB_OUTPUT"
             else
               git merge --ff-only upstream/main
-              git push origin main
+              git push origin "$MIRROR_BRANCH"
               echo "updated=true" >> "$GITHUB_OUTPUT"
             fi
           else
-            echo "::error::main has diverged from upstream, refusing to fast-forward"
+            echo "::error::$MIRROR_BRANCH has diverged from upstream, refusing to fast-forward"
             echo "diverged=true" >> "$GITHUB_OUTPUT"
             exit 1
           fi
 
-      - name: Rebase feature branch onto main
+      - name: Rebase feature branch onto the mirror
         id: rebase
         if: steps.ff.outputs.updated == 'true'
         run: |
           git checkout -B "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH"
-          if git rebase main; then
+          if git rebase "$MIRROR_BRANCH"; then
             echo "clean=true" >> "$GITHUB_OUTPUT"
           else
             git rebase --abort
             echo "clean=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Rebase of $FEATURE_BRANCH onto main conflicts"
+            echo "::warning::Rebase of $FEATURE_BRANCH onto $MIRROR_BRANCH conflicts"
           fi
 
       - name: Set up Go
@@ -113,16 +121,16 @@ jobs:
             exit 0
           fi
           if [ "${{ steps.ff.outputs.diverged }}" = "true" ]; then
-            reason='`main` has diverged from upstream and cannot be fast-forwarded.'
+            reason="\`$MIRROR_BRANCH\` has diverged from upstream and cannot be fast-forwarded."
           elif [ "${{ steps.rebase.outputs.clean }}" = "false" ]; then
-            reason="Rebasing \`$FEATURE_BRANCH\` onto the new \`main\` hit conflicts."
+            reason="Rebasing \`$FEATURE_BRANCH\` onto the new \`$MIRROR_BRANCH\` hit conflicts."
           else
-            reason="\`$FEATURE_BRANCH\` rebased cleanly, but the build or tests failed against the new \`main\`."
+            reason="\`$FEATURE_BRANCH\` rebased cleanly, but the build or tests failed against the new \`$MIRROR_BRANCH\`."
           fi
           {
             printf '%s\n\n' "$reason"
             printf '`%s` was left untouched. Resolve it locally:\n\n' "$FEATURE_BRANCH"
-            printf '```sh\ngit fetch origin\ngit rebase origin/main %s\n```\n\n' "$FEATURE_BRANCH"
+            printf '```sh\ngit fetch origin\ngit rebase origin/%s %s\n```\n\n' "$MIRROR_BRANCH" "$FEATURE_BRANCH"
             printf '[Workflow run](%s)\n' "$RUN_URL"
           } > /tmp/issue-body.md
           gh issue create --title "$title" --body-file /tmp/issue-body.md
