@@ -107,7 +107,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh workflow run Docker --ref "$FEATURE_BRANCH"
+          gh api --method POST \
+            "repos/${{ github.repository }}/actions/workflows/docker.yml/dispatches" \
+            -f "ref=$FEATURE_BRANCH"
 
       - name: Open an issue if the sync needs a human
         if: failure() || steps.rebase.outputs.clean == 'false' || steps.verify.outcome == 'failure'
@@ -133,4 +135,8 @@ jobs:
             printf '```sh\ngit fetch origin\ngit rebase origin/%s %s\n```\n\n' "$MIRROR_BRANCH" "$FEATURE_BRANCH"
             printf '[Workflow run](%s)\n' "$RUN_URL"
           } > /tmp/issue-body.md
-          gh issue create --title "$title" --body-file /tmp/issue-body.md
+          # Forks restrict issue creation with GITHUB_TOKEN, so make sure the reason
+          # is visible in the run itself even when filing the issue isn't allowed.
+          echo "::error::$reason"
+          gh issue create --title "$title" --body-file /tmp/issue-body.md || true
+          exit 1
