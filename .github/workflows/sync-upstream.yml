@@ -8,17 +8,19 @@ on:
 
 env:
   UPSTREAM: https://github.com/gomuks/gomuks.git
-  # The branch carrying local patches on top of upstream main.
-  FEATURE_BRANCH: reaction-notifications
+  # The branch carrying local patches on top of upstream main. main itself is
+  # only ever fast-forwarded from upstream, so it stays a clean mirror.
+  FEATURE_BRANCH: dev
   GOTOOLCHAIN: local
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    name: Sync main and rebase ${{ github.ref_name }}
+    name: Sync main and rebase dev
     permissions:
       contents: write
       issues: write
+      actions: write
 
     steps:
       - uses: actions/checkout@v6
@@ -89,6 +91,14 @@ jobs:
         if: steps.rebase.outputs.clean == 'true' && steps.verify.outcome == 'success'
         run: |
           git push --force-with-lease origin "$FEATURE_BRANCH"
+
+      - name: Rebuild the image
+        # Pushes made with GITHUB_TOKEN don't trigger workflows, so ask for the build explicitly.
+        if: steps.rebase.outputs.clean == 'true' && steps.verify.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run Docker --ref "$FEATURE_BRANCH"
 
       - name: Open an issue if the sync needs a human
         if: failure() || steps.rebase.outputs.clean == 'false' || steps.verify.outcome == 'failure'
