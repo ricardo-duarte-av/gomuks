@@ -31,9 +31,28 @@ jobs:
       actions: write
 
     steps:
+      - name: Check the sync token is present
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          if [ -z "$SYNC_TOKEN" ]; then
+            echo "::error::SYNC_TOKEN is empty. The default GITHUB_TOKEN cannot push"
+            echo "::error::workflow-file changes, so the mirror push will fail whenever"
+            echo "::error::upstream touches .github/workflows/. Add a repository secret"
+            echo "::error::named SYNC_TOKEN (classic PAT with repo + workflow scopes)."
+            exit 1
+          fi
+          echo "SYNC_TOKEN is set (${#SYNC_TOKEN} chars)."
+
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          # The default GITHUB_TOKEN cannot push changes to files under
+          # .github/workflows/, which upstream fast-forwards routinely touch.
+          # SYNC_TOKEN must be a classic PAT (repo + workflow scopes), or a
+          # GitHub App token that carries the `workflows` permission. The step
+          # above guarantees it is set.
+          token: ${{ secrets.SYNC_TOKEN }}
 
       - name: Configure git
         run: |
