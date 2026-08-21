@@ -176,11 +176,12 @@ func (pn *PushNotification) Split(yield func(*PushNotification) bool) {
 			panic("push notification message too long")
 		}
 		if currentSize+len(msg) > maxSize {
+			dismiss := takeDismisses(maxSize - currentSize)
 			if !yield(&PushNotification{
-				Dismiss:      takeDismisses(maxSize - currentSize),
+				Dismiss:      dismiss,
 				RawMessages:  pn.RawMessages[offset:i],
 				ImageAuth:    pn.ImageAuth,
-				HasImportant: hasSound,
+				HasImportant: hasSound || len(dismiss) > 0,
 			}) {
 				return
 			}
@@ -191,17 +192,21 @@ func (pn *PushNotification) Split(yield func(*PushNotification) bool) {
 		currentSize += len(msg)
 		hasSound = hasSound || pn.OrigMessages[i].Sound
 	}
+	dismiss := takeDismisses(maxSize - currentSize)
 	if !yield(&PushNotification{
-		Dismiss:      takeDismisses(maxSize - currentSize),
+		Dismiss:      dismiss,
 		RawMessages:  pn.RawMessages[offset:],
 		ImageAuth:    pn.ImageAuth,
-		HasImportant: hasSound,
+		HasImportant: hasSound || len(dismiss) > 0,
 	}) {
 		return
 	}
 	// Any dismissals that didn't fit are sent as extra pushes of their own.
 	for dismissOffset < len(pn.Dismiss) {
-		if !yield(&PushNotification{Dismiss: takeDismisses(maxSize)}) {
+		if !yield(&PushNotification{
+			Dismiss:      takeDismisses(maxSize),
+			HasImportant: true,
+		}) {
 			return
 		}
 	}
