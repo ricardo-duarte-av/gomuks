@@ -54,6 +54,11 @@ type PushDismiss struct {
 	RoomID id.RoomID `json:"room_id"`
 }
 
+// size returns a rough estimate of the JSON size of the dismissal, used for splitting payloads.
+func (pd *PushDismiss) size() int {
+	return len(pd.RoomID) + 64
+}
+
 var pushClient = &http.Client{
 	Transport: &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
@@ -74,7 +79,7 @@ func (gmx *Gomuks) SendPushNotifications(sync *jsoncmd.SyncComplete) {
 	var ctx context.Context
 	var push PushNotification
 	for roomID, room := range sync.Rooms {
-		if room.DismissNotifications && len(push.Dismiss) < 10 {
+		if room.DismissNotifications {
 			push.Dismiss = append(push.Dismiss, PushDismiss{RoomID: roomID})
 		}
 		if room.DismissNotifications && gmx.DesktopKey != "" {
@@ -149,19 +154,36 @@ func (pn *PushNotification) Split(yield func(*PushNotification) bool) {
 	const maxSize = 2000
 	currentSize := 0
 	offset := 0
+	dismissOffset := 0
 	hasSound := false
+	// Dismissals count towards the payload size limit too, so they're spread across the pushes
+	// instead of being repeated in every one of them.
+	takeDismisses := func(budget int) []PushDismiss {
+		start := dismissOffset
+		for dismissOffset < len(pn.Dismiss) {
+			size := pn.Dismiss[dismissOffset].size()
+			if budget-size < 0 && dismissOffset > start {
+				break
+			}
+			budget -= size
+			dismissOffset++
+		}
+		return pn.Dismiss[start:dismissOffset]
+	}
 	for i, msg := range pn.RawMessages {
 		if len(msg) >= maxSize {
 			// This is already checked in SendPushNotifications, so this should never happen
 			panic("push notification message too long")
 		}
 		if currentSize+len(msg) > maxSize {
-			yield(&PushNotification{
-				Dismiss:      pn.Dismiss,
+			if !yield(&PushNotification{
+				Dismiss:      takeDismisses(maxSize - currentSize),
 				RawMessages:  pn.RawMessages[offset:i],
 				ImageAuth:    pn.ImageAuth,
 				HasImportant: hasSound,
-			})
+			}) {
+				return
+			}
 			offset = i
 			currentSize = 0
 			hasSound = false
@@ -169,12 +191,20 @@ func (pn *PushNotification) Split(yield func(*PushNotification) bool) {
 		currentSize += len(msg)
 		hasSound = hasSound || pn.OrigMessages[i].Sound
 	}
-	yield(&PushNotification{
-		Dismiss:      pn.Dismiss,
+	if !yield(&PushNotification{
+		Dismiss:      takeDismisses(maxSize - currentSize),
 		RawMessages:  pn.RawMessages[offset:],
 		ImageAuth:    pn.ImageAuth,
 		HasImportant: hasSound,
-	})
+	}) {
+		return
+	}
+	// Any dismissals that didn't fit are sent as extra pushes of their own.
+	for dismissOffset < len(pn.Dismiss) {
+		if !yield(&PushNotification{Dismiss: takeDismisses(maxSize)}) {
+			return
+		}
+	}
 }
 
 func (gmx *Gomuks) SendPushNotification(ctx context.Context, pushRegs []*database.PushRegistration, notif *PushNotification) {
