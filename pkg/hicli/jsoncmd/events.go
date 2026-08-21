@@ -60,8 +60,13 @@ type SyncRoom struct {
 	// New MSC4354 sticky events that aren't included in timeline.
 	Sticky []database.EventRowID `json:"sticky,omitempty"`
 
-	DismissNotifications bool               `json:"dismiss_notifications,omitempty"`
-	Notifications        []SyncNotification `json:"notifications,omitempty"`
+	DismissNotifications bool `json:"dismiss_notifications,omitempty"`
+	// The event ID and timestamp of our own read receipt that caused the dismissal, if any.
+	// Clients can use these to order the dismissal against incoming notifications.
+	DismissUpTo id.EventID `json:"dismiss_up_to,omitempty"`
+	// Unix milliseconds
+	DismissUpToTS int64              `json:"dismiss_up_to_ts,omitempty"`
+	Notifications []SyncNotification `json:"notifications,omitempty"`
 }
 
 type SyncNotification struct {

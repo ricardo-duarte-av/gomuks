@@ -33,7 +33,9 @@ func makeDismisses(count int) []PushDismiss {
 	dismisses := make([]PushDismiss, count)
 	for i := range dismisses {
 		dismisses[i] = PushDismiss{
-			RoomID: id.RoomID(fmt.Sprintf("!room%02d:example.com", i)),
+			RoomID:   id.RoomID(fmt.Sprintf("!room%02d:example.com", i)),
+			ReadUpTo: id.EventID(fmt.Sprintf("$event%02d", i)),
+			Ts:       1755000000000 + int64(i),
 		}
 	}
 	return dismisses
