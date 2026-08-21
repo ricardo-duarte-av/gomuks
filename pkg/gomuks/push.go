@@ -52,11 +52,15 @@ type PushNotification struct {
 
 type PushDismiss struct {
 	RoomID id.RoomID `json:"room_id"`
+	// The event ID and timestamp of the read receipt that caused the dismissal, if known.
+	// Clients can use these to order the dismissal against notifications that may arrive out of order.
+	ReadUpTo id.EventID `json:"read_up_to,omitempty"`
+	Ts       int64      `json:"ts,omitempty"`
 }
 
 // size returns a rough estimate of the JSON size of the dismissal, used for splitting payloads.
 func (pd *PushDismiss) size() int {
-	return len(pd.RoomID) + 64
+	return len(pd.RoomID) + len(pd.ReadUpTo) + 64
 }
 
 var pushClient = &http.Client{
@@ -80,10 +84,14 @@ func (gmx *Gomuks) SendPushNotifications(sync *jsoncmd.SyncComplete) {
 	var push PushNotification
 	for roomID, room := range sync.Rooms {
 		if room.DismissNotifications {
-			push.Dismiss = append(push.Dismiss, PushDismiss{RoomID: roomID})
-		}
-		if room.DismissNotifications && gmx.DesktopKey != "" {
-			emitDesktopDismiss(roomID)
+			push.Dismiss = append(push.Dismiss, PushDismiss{
+				RoomID:   roomID,
+				ReadUpTo: room.DismissUpTo,
+				Ts:       room.DismissUpToTS,
+			})
+			if gmx.DesktopKey != "" {
+				emitDesktopDismiss(roomID)
+			}
 		}
 		for _, notif := range room.Notifications {
 			if ctx == nil {

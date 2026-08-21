@@ -1183,6 +1183,16 @@ func (h *HiClient) processStateAndTimeline(
 	dismissNotifications := updatedRoom.UnreadNotifications == 0 &&
 		len(newNotifications) == 0 &&
 		(room.UnreadNotifications > 0 || len(newOwnReceipts) > 0)
+	var dismissUpTo id.EventID
+	var dismissUpToTS int64
+	if dismissNotifications {
+		for _, receipt := range receipts {
+			if receipt.UserID == h.Account.UserID && !receipt.Timestamp.IsZero() && receipt.Timestamp.UnixMilli() > dismissUpToTS {
+				dismissUpTo = receipt.EventID
+				dismissUpToTS = receipt.Timestamp.UnixMilli()
+			}
+		}
+	}
 	if timeline.PrevBatch != "" && (room.PrevBatch == "" || timeline.Limited) {
 		updatedRoom.PrevBatch = timeline.PrevBatch
 	}
@@ -1217,6 +1227,8 @@ func (h *HiClient) processStateAndTimeline(
 
 			Notifications:        newNotifications,
 			DismissNotifications: dismissNotifications,
+			DismissUpTo:          dismissUpTo,
+			DismissUpToTS:        dismissUpToTS,
 		}
 	}
 	return nil
