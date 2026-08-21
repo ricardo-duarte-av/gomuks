@@ -73,12 +73,12 @@ var DisablePush = false
 func (gmx *Gomuks) SendPushNotifications(sync *jsoncmd.SyncComplete) {
 	var ctx context.Context
 	var push PushNotification
-	for _, room := range sync.Rooms {
+	for roomID, room := range sync.Rooms {
 		if room.DismissNotifications && len(push.Dismiss) < 10 {
-			push.Dismiss = append(push.Dismiss, PushDismiss{RoomID: room.Meta.ID})
+			push.Dismiss = append(push.Dismiss, PushDismiss{RoomID: roomID})
 		}
 		if room.DismissNotifications && gmx.DesktopKey != "" {
-			emitDesktopDismiss(room.Meta.ID)
+			emitDesktopDismiss(roomID)
 		}
 		for _, notif := range room.Notifications {
 			if ctx == nil {

@@ -1178,7 +1178,11 @@ func (h *HiClient) processStateAndTimeline(
 	} else {
 		updatedRoom.UnreadCounts.Add(newUnreadCounts)
 	}
-	dismissNotifications := room.UnreadNotifications > 0 && updatedRoom.UnreadNotifications == 0 && len(newNotifications) == 0
+	// Dismiss notifications when the room has no notifications left and we either had some before,
+	// or just processed our own read receipt (the old count is sometimes already zero in that case).
+	dismissNotifications := updatedRoom.UnreadNotifications == 0 &&
+		len(newNotifications) == 0 &&
+		(room.UnreadNotifications > 0 || len(newOwnReceipts) > 0)
 	if timeline.PrevBatch != "" && (room.PrevBatch == "" || timeline.Limited) {
 		updatedRoom.PrevBatch = timeline.PrevBatch
 	}
@@ -1193,13 +1197,12 @@ func (h *HiClient) processStateAndTimeline(
 	if err != nil {
 		return err
 	}
-	// TODO why is *old* unread count sometimes zero when processing the read receipt that is making it zero?
 	if syncCtx != nil && (roomChanged || len(accountData) > 0 || len(newOwnReceipts) > 0 || len(receipts) > 0 || len(timelineRowTuples) > 0 || len(allNewEvents) > 0 || len(newStickyRows) > 0) {
 		for _, receipt := range receipts {
 			receipt.RoomID = ""
 		}
 		roomID := room.ID
-		if !syncRoomChanged {
+		if !syncRoomChanged && !dismissNotifications {
 			room = nil
 		}
 		syncCtx.evt.Rooms[roomID] = &jsoncmd.SyncRoom{
