@@ -66,6 +66,9 @@ func TestPushNotificationSplit_DismissOnly(t *testing.T) {
 	if len(chunks[0].Dismiss) != 1 {
 		t.Errorf("expected 1 dismissal, got %d", len(chunks[0].Dismiss))
 	}
+	if !chunks[0].HasImportant {
+		t.Error("expected dismiss-only push to be marked important")
+	}
 }
 
 func TestPushNotificationSplit_ManyDismisses(t *testing.T) {
@@ -94,6 +97,9 @@ func TestPushNotificationSplit_ManyDismisses(t *testing.T) {
 		// Same limit as SendPushNotification
 		if encodedLen := base64.StdEncoding.EncodedLen(len(payload)); encodedLen >= 4000 {
 			t.Errorf("push %d is too long (%d encoded bytes)", i, encodedLen)
+		}
+		if len(chunk.Dismiss) > 0 && !chunk.HasImportant {
+			t.Errorf("push %d has dismissals but isn't marked important", i)
 		}
 	}
 	if gotMessages != len(raw) {
