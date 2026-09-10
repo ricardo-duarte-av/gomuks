@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/rs/zerolog"
@@ -52,6 +53,27 @@ type PushNewMessage struct {
 	Mention bool   `json:"mention,omitempty"`
 	Reply   bool   `json:"reply,omitempty"`
 	Sound   bool   `json:"sound,omitempty"`
+
+	RTC *PushRTCNotification `json:"rtc,omitempty"`
+}
+
+// isImportant returns whether the notification should be delivered at high priority.
+func (pnm *PushNewMessage) isImportant() bool {
+	return pnm.Sound || (pnm.RTC != nil && pnm.RTC.Type == rtcNotificationTypeRing)
+}
+
+// PushRTCNotification is the call metadata included in pushes for MSC4075 RTC notifications.
+// Clients use it to show call UI instead of a regular message notification.
+type PushRTCNotification struct {
+	// Type is the notification_type of the event, passed through as-is. Usually "ring" or "notification".
+	Type string `json:"type"`
+	// Intent is the m.call.intent of the event, if present. Usually "video" or "audio".
+	Intent string `json:"intent,omitempty"`
+	// CallID is the event ID of the RTC session the notification references, if present.
+	CallID id.EventID `json:"call_id,omitempty"`
+	// ExpiresAt is when the notification stops being relevant, if the event declared a lifetime.
+	// It's calculated from the sender's clock, which may be skewed from both the server and the client.
+	ExpiresAt *jsontime.UnixMilli `json:"expires_at,omitempty"`
 }
 
 func (gmx *Gomuks) getFilePath(ctx context.Context, url string) string {
@@ -188,6 +210,89 @@ func (gmx *Gomuks) formatReactionNotificationText(ctx context.Context, notif jso
 	return fmt.Sprintf("Reacted %s to %q", key, targetText)
 }
 
+// EventRTCNotification is the MSC4075 event type for RTC (call) notifications.
+var EventRTCNotification = event.Type{Type: "org.matrix.msc4075.rtc.notification", Class: event.MessageEventType}
+
+const (
+	rtcNotificationTypeRing   = "ring"
+	rtcNotificationTypeNotify = "notification"
+)
+
+type rtcNotificationContent struct {
+	NotificationType string           `json:"notification_type"`
+	Intent           string           `json:"m.call.intent"`
+	SenderTS         int64            `json:"sender_ts"`
+	Lifetime         int64            `json:"lifetime"`
+	RelatesTo        *event.RelatesTo `json:"m.relates_to"`
+	Mentions         *event.Mentions  `json:"m.mentions"`
+}
+
+func rtcNotificationText(notificationType, intent string) string {
+	video := intent == "video"
+	if notificationType == rtcNotificationTypeRing {
+		if video {
+			return "Incoming video call"
+		}
+		return "Incoming call"
+	}
+	if video {
+		return "Started a video call"
+	}
+	return "Started a call"
+}
+
+// rtcNotificationExpiry calculates when an RTC notification stops being relevant.
+// sender_ts is the sender's clock rather than the server's, but it's what the lifetime is
+// relative to. Senders that don't include it fall back to the event timestamp.
+func rtcNotificationExpiry(senderTS, lifetime, eventTS int64) (time.Time, bool) {
+	if lifetime <= 0 {
+		return time.Time{}, false
+	}
+	if senderTS == 0 {
+		senderTS = eventTS
+	}
+	return time.UnixMilli(senderTS + lifetime), true
+}
+
+func (gmx *Gomuks) formatRTCNotification(ctx context.Context, notif jsoncmd.SyncNotification, rawContent json.RawMessage) *PushNewMessage {
+	var content rtcNotificationContent
+	err := json.Unmarshal(rawContent, &content)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).
+			Stringer("event_id", notif.Event.ID).
+			Msg("Failed to unmarshal RTC notification content to format push notification")
+		return nil
+	}
+	if content.NotificationType == "" {
+		return nil
+	}
+	rtc := &PushRTCNotification{
+		Type:   content.NotificationType,
+		Intent: content.Intent,
+	}
+	if content.RelatesTo != nil && content.RelatesTo.Type == event.RelReference {
+		rtc.CallID = content.RelatesTo.EventID
+	}
+	if expiry, ok := rtcNotificationExpiry(content.SenderTS, content.Lifetime, notif.Event.Timestamp.UnixMilli()); ok {
+		if expiry.Before(time.Now()) {
+			// Syncing after being offline for a while can replay call notifications that are long
+			// dead, and there's nothing useful to show for those.
+			zerolog.Ctx(ctx).Debug().
+				Stringer("event_id", notif.Event.ID).
+				Time("expiry", expiry).
+				Msg("Skipping push for expired RTC notification")
+			return nil
+		}
+		rtc.ExpiresAt = ptr.Ptr(jsontime.UM(expiry))
+	}
+	msg := gmx.newPushNewMessage(
+		ctx, notif, rtcNotificationText(content.NotificationType, content.Intent), "",
+		content.Mentions.Has(gmx.Client.Account.UserID), false,
+	)
+	msg.RTC = rtc
+	return msg
+}
+
 func (gmx *Gomuks) formatPushNotificationMessage(ctx context.Context, notif jsoncmd.SyncNotification) *PushNewMessage {
 	evtType := notif.Event.GetType()
 	rawContent := notif.Event.Content
@@ -200,6 +305,9 @@ func (gmx *Gomuks) formatPushNotificationMessage(ctx context.Context, notif json
 			return nil
 		}
 		return gmx.newPushNewMessage(ctx, notif, text, "", false, false)
+	}
+	if evtType == EventRTCNotification {
+		return gmx.formatRTCNotification(ctx, notif, rawContent)
 	}
 	if evtType != event.EventMessage && evtType != event.EventSticker {
 		return nil

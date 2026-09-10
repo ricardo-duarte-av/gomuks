@@ -198,7 +198,7 @@ func (pn *PushNotification) Split(yield func(*PushNotification) bool) {
 			hasSound = false
 		}
 		currentSize += len(msg)
-		hasSound = hasSound || pn.OrigMessages[i].Sound
+		hasSound = hasSound || pn.OrigMessages[i].isImportant()
 	}
 	dismiss := takeDismisses(maxSize - currentSize)
 	if !yield(&PushNotification{
