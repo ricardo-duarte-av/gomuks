@@ -18,24 +18,25 @@ import { fakeGomuksSender } from "@/api/statestore"
 import { BotArgumentValue, EventID, RawDBEvent, RoomID, WrappedBotCommand } from "@/api/types"
 import type { CommandName } from "@/api/types/stdcommands.d.ts"
 import { escapeHTML } from "@/util/markdown.ts"
-import { matrixToToMatrixURI, parseMatrixURI } from "@/util/validation.ts"
+import { ensureString, ensureStringArray, matrixToToMatrixURI, parseMatrixURI } from "@/util/validation.ts"
 import { MainScreenContextFields } from "../MainScreenContext.ts"
 import { modals } from "../modal"
 import { RoomContextData } from "../roomview/roomcontext.ts"
+import { jumpToEvent } from "../util/jumpToEvent.tsx"
 
 const commandHandlers: { [K in CommandName]?: CommandCallback } = {
-	join: ({ client, mainScreen, reply }, { room_reference }) => {
+	join: ({ client, mainScreen, reply }, { room_reference, reason, via }) => {
 		if (typeof room_reference !== "string") {
 			return
 		}
 		room_reference = matrixToToMatrixURI(room_reference) ?? room_reference
-		let via: string[] = []
+		let parsedVia = ensureStringArray(via)
 		let openEventID: EventID | undefined
 		if (room_reference.startsWith("matrix:")) {
 			const parsed = parseMatrixURI(room_reference)
 			if (parsed) {
 				room_reference = parsed.identifier
-				via = parsed.params.getAll("via")
+				parsedVia = parsed.params.getAll("via")
 				openEventID = parsed.eventID
 			}
 		}
@@ -46,6 +47,7 @@ const commandHandlers: { [K in CommandName]?: CommandCallback } = {
 						previewMeta: {
 							alias: room_reference,
 							via: res.servers.slice(0, 3),
+							joinReason: ensureString(reason) || undefined,
 						},
 					})
 				},
@@ -53,7 +55,10 @@ const commandHandlers: { [K in CommandName]?: CommandCallback } = {
 			)
 		} else if (room_reference.startsWith("!")) {
 			mainScreen.setActiveRoom(room_reference, {
-				previewMeta: { via },
+				previewMeta: {
+					via: parsedVia,
+					joinReason: ensureString(reason) || undefined,
+				},
 				openEventID,
 			})
 		} else if (room_reference.startsWith("@")) {
@@ -61,6 +66,8 @@ const commandHandlers: { [K in CommandName]?: CommandCallback } = {
 				type: "user",
 				userID: room_reference,
 			})
+		} else if (room_reference.startsWith("$") && window.activeRoomContext) {
+			jumpToEvent(window.activeRoomContext, room_reference)
 		} else {
 			reply(escapedHTML`Invalid room reference <code>${room_reference}</code>`)
 		}
@@ -91,15 +98,19 @@ export function interceptCommand(
 	spec: WrappedBotCommand,
 	inputArgs: BotArgMap,
 ): boolean {
+	const reply = (html: string) => {
+		client.handleOutgoingEvent(makeFakeEvent(roomCtx.store.roomID, html), roomCtx.store)
+	}
 	if (spec.source !== fakeGomuksSender) {
+		if (roomCtx.store.preferences.hide_fingerprint) {
+			reply("External bot commands are disabled when the hide fingerprint option is enabled")
+			return true
+		}
 		return false
 	}
 	const handler = commandHandlers[spec.command as CommandName]
 	if (!handler) {
 		return false
-	}
-	const reply = (html: string) => {
-		client.handleOutgoingEvent(makeFakeEvent(roomCtx.store.roomID, html), roomCtx.store)
 	}
 	handler({ client, mainScreen, roomCtx, reply }, inputArgs)
 	return true

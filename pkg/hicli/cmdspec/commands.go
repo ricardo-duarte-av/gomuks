@@ -33,6 +33,7 @@ const (
 	DiscardSession = "discardsession"
 	Devtools       = "devtools"
 	Meow           = "meow"
+	Version        = "version"
 	AddAlias       = "alias add"
 	DelAlias       = "alias del"
 	ConvertToDM    = "converttodm"
@@ -50,8 +51,11 @@ var CommandDefinitions = []*cmdschema.EventContent{{
 		Description: event.MakeExtensibleText("Meow"),
 	}},
 }, {
+	Command:     Version,
+	Description: event.MakeExtensibleText("Get the running version of the gomuks backend"),
+}, {
 	Command:     Join,
-	Aliases:     []string{"open"},
+	Aliases:     []string{"open", "jump"},
 	Description: event.MakeExtensibleText("Jump to the join room view by ID, alias or link"),
 	Parameters: []*cmdschema.Parameter{{
 		Key:         "room_reference",
@@ -61,6 +65,11 @@ var CommandDefinitions = []*cmdschema.EventContent{{
 		Key:         "reason",
 		Schema:      cmdschema.PrimitiveTypeString.Schema(),
 		Description: event.MakeExtensibleText("Reason for joining"),
+		Optional:    true,
+	}, {
+		Key:         "via",
+		Schema:      cmdschema.Array(cmdschema.PrimitiveTypeServerName.Schema()),
+		Description: event.MakeExtensibleText("Via server"),
 		Optional:    true,
 	}},
 	TailParam: "reason",

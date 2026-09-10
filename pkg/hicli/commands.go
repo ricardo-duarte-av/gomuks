@@ -22,10 +22,12 @@ import (
 	"go.mau.fi/util/random"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/id"
 
 	"go.mau.fi/gomuks/pkg/hicli/cmdspec"
 	"go.mau.fi/gomuks/pkg/hicli/database"
+	"go.mau.fi/gomuks/version"
 )
 
 func (h *HiClient) ProcessCommand(
@@ -43,6 +45,8 @@ func (h *HiClient) ProcessCommand(
 		responseText = h.handleCmdDiscardSession(ctx, roomID)
 	case cmdspec.Meow:
 		responseText = "Meow " + gjson.GetBytes(cmd.Arguments, "meow").Str
+	case cmdspec.Version:
+		responseHTML = format.RenderMarkdown(version.Gomuks.MarkdownDescription(), true, false).FormattedBody
 	case cmdspec.Invite:
 		responseText, retErr = callWithParsedArgs(ctx, roomID, cmd.Arguments, relatesTo, h.handleCmdInvite)
 	case cmdspec.Kick:
@@ -162,18 +166,22 @@ func (h *HiClient) handleCmdBan(ctx context.Context, roomID id.RoomID, args invi
 }
 
 type joinArgs struct {
-	RoomReference string `json:"room_reference"`
-	Reason        string `json:"reason"`
+	RoomReference string   `json:"room_reference"`
+	Reason        string   `json:"reason"`
+	Via           []string `json:"via"`
 }
 
 func (h *HiClient) handleCmdJoin(ctx context.Context, _ id.RoomID, args joinArgs, _ *event.RelatesTo) string {
 	roomRef := args.RoomReference
 	req := &mautrix.ReqJoinRoom{
 		Reason: args.Reason,
+		Via:    args.Via,
 	}
 	if url, _ := id.ParseMatrixURIOrMatrixToURL(roomRef); url != nil {
 		roomRef = url.PrimaryIdentifier()
-		req.Via = url.Via
+		if len(url.Via) > 0 {
+			req.Via = url.Via
+		}
 	}
 	if len(roomRef) == 0 || (roomRef[0] != '!' && roomRef[0] != '#') {
 		return "Input is not a room ID or alias"
