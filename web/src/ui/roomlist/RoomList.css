@@ -151,14 +151,16 @@ div.room-search-wrapper {
 }
 
 div.room-entry {
+	--room-list-entry-height: 3rem;
+
 	width: 100%;
 	display: flex;
 	gap: .25rem;
 	user-select: none;
 	cursor: var(--clickable-cursor);
-	height: 3rem;
+	height: var(--room-list-entry-height);
 	padding: var(--room-list-padding) 0;
-	contain-intrinsic-height: calc(3rem + var(--room-list-padding) * 2);
+	contain-intrinsic-height: calc(var(--room-list-entry-height) + var(--room-list-padding) * 2);
 	content-visibility: auto;
 	contain: strict;
 
@@ -171,33 +173,40 @@ div.room-entry {
 	}
 
 	> div.room-entry-left {
-		height: 3rem;
-		width: 3rem;
+		height: var(--room-list-entry-height);
+		width: var(--room-list-entry-height);
+		margin: 0 .5rem 0 .75rem;
 
 		> img.room-avatar {
-			margin: .25rem;
+			margin: .25rem 0;
 		}
 	}
 
 	> div.room-entry-right {
 		width: 100%;
+		min-width: 0;
 		display: flex;
 		flex-direction: column;
-		overflow: hidden;
-		justify-content: space-around;
+		justify-content: center;
+		line-height: 1.125;
 
 		> div.room-name {
-			font-weight: bold;
-			overflow: hidden;
+			font-weight: 500;
+
+			&.has-unreads {
+				font-weight: bold;
+			}
+		}
+
+		> div.room-name, > div.message-preview {
+			overflow-x: clip;
+			overflow-y: visible;
 			white-space: nowrap;
 			text-overflow: ellipsis;
 		}
 
 		> div.message-preview {
-			text-overflow: ellipsis;
-			white-space: nowrap;
-			overflow: hidden;
-
+			color: var(--semisecondary-text-color);
 			> span.sender-name {
 				display: block;
 				max-width: 6rem;
@@ -208,6 +217,10 @@ div.room-entry {
 				display: block;
 			}
 		}
+	}
+
+	> div.room-entry-unreads-placeholder {
+		width: .5rem;
 	}
 
 	@container left-panel (max-width: 8rem) {
@@ -248,9 +261,9 @@ div.room-entry {
 div.room-entry-unreads {
 	display: flex;
 	align-items: center;
-	justify-content: center;
-	width: 3rem;
-	margin-right: .25rem;
+	justify-content: right;
+	margin-left: .25rem;
+	margin-right: .5rem;
 
 	&.floating {
 		z-index: 2;
@@ -258,7 +271,9 @@ div.room-entry-unreads {
 		width: 0;
 		margin-left: auto;
 		margin-bottom: auto;
+		margin-right: .25rem;
 		position: relative;
+		justify-content: center;
 
 		> div.unread-count {
 			position: absolute;
@@ -270,7 +285,7 @@ div.room-entry-unreads {
 
 	> div.unread-count {
 		--unread-count-size: 1rem;
-		--unread-count-padding-inline: calc(var(--unread-count-size)/4);
+		--unread-count-padding-inline: calc(var(--unread-count-size)/3);
 		--unread-count-padding-block: calc(var(--unread-count-size)/8);
 
 		display: flex;
@@ -289,12 +304,6 @@ div.room-entry-unreads {
 
 		padding-inline: var(--unread-count-padding-inline);
 		padding-block: var(--unread-count-padding-block);
-
-		&.big {
-			--unread-count-size: 1.5rem;
-			font-size: 1em;
-			font-weight: bold;
-		}
 
 		&.marked-unread {
 			background-color: var(--unread-counter-marked-unread-bg);

@@ -1,7 +1,11 @@
 :root {
 	color-scheme: light;
-	--font-stack: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-	--monospace-font-stack: "Fira Code", monospace;
+	--font-stack: "Inter", sans-serif;
+	--letter-spacing: -0.0044em;
+	--font-feature-settings: "cv05"; /* tail for l */
+	--monospace-font-feature-settings: "cv02", "ss03"; /* alternate g for inter consistency and alternate & */
+	--monospace-font-stack: "Fira Code VF", "Fira Code", monospace;
+	--monospace-letter-spacing: -0.0088em;
 
 	--window-top-margin: env(safe-area-inset-top, 0px);
 	--window-bottom-margin: env(safe-area-inset-bottom, 0px);
@@ -91,15 +95,20 @@
 	--room-list-padding: .125rem;
 
 	--timeline-avatar-size: 2.5rem;
+	--timeline-avatar-margin: 2px;
+	--timeline-avatar-size-half: calc(var(--timeline-avatar-size) / 2 + var(--timeline-avatar-margin));
 	--timeline-avatar-gap: .5rem;
 	--timeline-avatar-total-size: calc(var(--timeline-avatar-size) + var(--timeline-avatar-gap));
-	--timeline-message-gap: .5rem;
-	--timeline-message-gap-same-sender: calc(var(--timeline-message-gap) / 2);
+	--timeline-message-gap: .25rem;
+	--timeline-message-gap-same-sender: 0;
 	--timeline-message-gap-small-event: 0;
 	--timeline-message-gap-same-thread: 0;
 	--timeline-sender-name-timestamp-gap: .25rem;
 	--timeline-sender-name-content-gap: 0;
-	--timeline-vertical-padding: 0;
+	--timeline-vertical-padding: .125rem;
+	--timeline-vertical-padding-small-event: 0;
+	--timeline-vertical-padding-same-sender: var(--timeline-vertical-padding);
+	--timeline-vertical-padding-small-thread: 0;
 	--timeline-horizontal-padding: 1.5rem;
 	--timeline-status-size: 4rem;
 
@@ -184,8 +193,58 @@
 	}
 }
 
+@font-face {
+	font-family: "Inter";
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url("fonts/Inter-Regular.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Inter";
+	font-style: italic;
+	font-weight: 400;
+	font-display: swap;
+	src: url("fonts/Inter-Italic.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Inter";
+	font-style: normal;
+	font-weight: 700;
+	font-display: swap;
+	src: url("fonts/Inter-Bold.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Inter";
+	font-style: normal;
+	font-weight: 500;
+	font-display: swap;
+	src: url("fonts/Inter-Medium.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Inter";
+	font-style: italic;
+	font-weight: 700;
+	font-display: swap;
+	src: url("fonts/Inter-BoldItalic.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: 'Fira Code VF';
+	src: url('fonts/FiraCode-VF.woff2');
+	font-weight: 300 700;
+	font-display: swap;
+	font-style: normal;
+}
+
 body {
 	font-family: var(--font-stack);
+	font-feature-settings: var(--font-feature-settings);
+	letter-spacing: var(--letter-spacing);
 	margin: 0;
 	padding: 0;
 	background-color: var(--background-color);
@@ -217,6 +276,8 @@ main {
 
 pre, code {
 	font-family: var(--monospace-font-stack);
+	font-feature-settings: var(--monospace-font-feature-settings);
+	letter-spacing: var(--monospace-letter-spacing);
 }
 
 input, textarea {
@@ -224,6 +285,8 @@ input, textarea {
 	background-color: inherit;
 	font-size: 1em;
 	font-family: var(--font-stack);
+	font-feature-settings: var(--font-feature-settings);
+	letter-spacing: var(--letter-spacing);
 }
 
 button, a.button, span.button {
@@ -239,6 +302,8 @@ button, a.button, span.button {
 	color: inherit;
 	/* Buttons sometimes have their own fonts? */
 	font-family: var(--font-stack);
+	font-feature-settings: var(--font-feature-settings);
+	letter-spacing: var(--letter-spacing);
 
 	&:hover, &:focus {
 		background-color: var(--button-hover-color);
