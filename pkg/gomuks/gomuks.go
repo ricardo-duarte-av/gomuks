@@ -38,7 +38,6 @@ import (
 	"go.mau.fi/util/exerrors"
 	"go.mau.fi/util/exzerolog"
 	"go.mau.fi/util/ptr"
-	"golang.org/x/net/http2"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
@@ -52,8 +51,6 @@ type Gomuks struct {
 	Log    *zerolog.Logger
 	Server *http.Server
 	Client *hicli.HiClient
-
-	RootOverride string
 
 	ConfigDir string
 	DataDir   string
@@ -112,7 +109,7 @@ func (gmx *Gomuks) InitDirectories() {
 	// We need 4 directories: config, data, cache, logs
 	//
 	// 1. If GOMUKS_*_HOME is set, that value is used as the directory.
-	// 2. If GOMUKS_ROOT or the root argument is set, all directories are created under that.
+	// 2. If GOMUKS_ROOT is set, all directories are created under that.
 	// 3. Use system-specific defaults as below
 	//
 	// *nix:
@@ -130,7 +127,7 @@ func (gmx *Gomuks) InitDirectories() {
 	// - Config and Data: $HOME/Library/Application Support/gomuks
 	// - Cache: $HOME/Library/Caches/gomuks
 	// - Logs: $HOME/Library/Logs/gomuks
-	gomuksRoot := cmp.Or(gmx.RootOverride, os.Getenv("GOMUKS_ROOT"))
+	gomuksRoot := os.Getenv("GOMUKS_ROOT")
 	gmx.CacheDir = os.Getenv("GOMUKS_CACHE_HOME")
 	gmx.ConfigDir = os.Getenv("GOMUKS_CONFIG_HOME")
 	gmx.DataDir = os.Getenv("GOMUKS_DATA_HOME")
@@ -215,20 +212,18 @@ func (gmx *Gomuks) initClient() error {
 		gmx.HandleEvent,
 	)
 	gmx.Client.Client.SyncPresence = ptr.Val(gmx.Config.Matrix.SetPresence)
+	if gmx.Config.Matrix.InitialDeviceDisplayName != "" {
+		gmx.Client.InitialDeviceDisplayName = gmx.Config.Matrix.InitialDeviceDisplayName
+	}
 	gmx.Client.LogoutFunc = gmx.Logout
 	httpClient := gmx.Client.Client.Client
 	if runtime.GOOS == "js" {
 		gmx.Client.Client.UserAgent = ""
 		httpClient.Transport = nil
-	} else {
-		httpClient.Transport.(*http.Transport).ForceAttemptHTTP2 = false
-		if !gmx.Config.Matrix.DisableHTTP2 {
-			h2, err := http2.ConfigureTransports(httpClient.Transport.(*http.Transport))
-			if err != nil {
-				gmx.Log.WithLevel(zerolog.FatalLevel).Err(err).Msg("Failed to configure HTTP/2")
-				os.Exit(13)
-			}
-			h2.ReadIdleTimeout = 30 * time.Second
+	} else if !gmx.Config.Matrix.DisableHTTP2 {
+		httpClient.Transport.(*http.Transport).ForceAttemptHTTP2 = true
+		httpClient.Transport.(*http.Transport).HTTP2 = &http.HTTP2Config{
+			PingTimeout: 30 * time.Second,
 		}
 	}
 	gmx.Log.Debug().Msg("Client instance created")
