@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/rs/zerolog"
@@ -56,25 +55,6 @@ type PushNewMessage struct {
 	Sound   bool   `json:"sound,omitzero"`
 
 	RTC *PushRTCNotification `json:"rtc,omitempty"`
-}
-
-// isImportant returns whether the notification should be delivered at high priority.
-func (pnm *PushNewMessage) isImportant() bool {
-	return pnm.Sound || (pnm.RTC != nil && pnm.RTC.Type == rtcNotificationTypeRing)
-}
-
-// PushRTCNotification is the call metadata included in pushes for MSC4075 RTC notifications.
-// Clients use it to show call UI instead of a regular message notification.
-type PushRTCNotification struct {
-	// Type is the notification_type of the event, passed through as-is. Usually "ring" or "notification".
-	Type string `json:"type"`
-	// Intent is the m.call.intent of the event, if present. Usually "video" or "audio".
-	Intent string `json:"intent,omitempty"`
-	// CallID is the event ID of the RTC session the notification references, if present.
-	CallID id.EventID `json:"call_id,omitempty"`
-	// ExpiresAt is when the notification stops being relevant, if the event declared a lifetime.
-	// It's calculated from the sender's clock, which may be skewed from both the server and the client.
-	ExpiresAt *jsontime.UnixMilli `json:"expires_at,omitempty"`
 }
 
 func (gmx *Gomuks) getFilePath(ctx context.Context, url string) string {
@@ -157,158 +137,14 @@ func (gmx *Gomuks) getNotificationUser(ctx context.Context, roomID id.RoomID, us
 	return
 }
 
-// reactionTargetPreviewLength is the maximum length of the reacted-to message quoted in a reaction notification.
-const reactionTargetPreviewLength = 80
-
-func reactionKeyForNotification(key string) string {
-	// Custom emoji reactions use an mxc:// URI as the key, which isn't worth showing as-is.
-	if strings.HasPrefix(key, "mxc://") {
-		return "with a custom emoji"
-	}
-	if utf8.RuneCountInString(key) > 16 {
-		return string([]rune(key)[:16]) + "…"
-	}
-	return key
-}
-
-func (gmx *Gomuks) formatReactionNotificationText(ctx context.Context, notif jsoncmd.SyncNotification, rawContent json.RawMessage) string {
-	var content event.ReactionEventContent
-	err := json.Unmarshal(rawContent, &content)
-	if err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).
-			Stringer("event_id", notif.Event.ID).
-			Msg("Failed to unmarshal reaction content to format push notification")
-		return ""
-	}
-	if content.RelatesTo.Key == "" || content.RelatesTo.EventID == "" {
-		return ""
-	}
-	key := reactionKeyForNotification(content.RelatesTo.Key)
-	target, err := gmx.Client.DB.Event.GetByID(ctx, notif.Room.ID, content.RelatesTo.EventID)
-	if err != nil {
-		zerolog.Ctx(ctx).Err(err).
-			Stringer("event_id", content.RelatesTo.EventID).
-			Msg("Failed to get reaction target for push notification")
-	}
-	fallback := "a message"
-	if target != nil && target.Sender == gmx.Client.Account.UserID {
-		fallback = "your message"
-	}
-	// Preview text is only generated for messages and stickers, so this doubles as an
-	// event type filter. It also follows edits, so the quote matches the current text.
-	var targetText string
-	if target != nil {
-		if localContent := target.GetLocalContent(); localContent != nil {
-			targetText = localContent.PreviewText
-		}
-	}
-	if targetText == "" {
-		return fmt.Sprintf("Reacted %s to %s", key, fallback)
-	}
-	if utf8.RuneCountInString(targetText) > reactionTargetPreviewLength {
-		targetText = string([]rune(targetText)[:reactionTargetPreviewLength]) + "…"
-	}
-	return fmt.Sprintf("Reacted %s to %q", key, targetText)
-}
-
-// EventRTCNotification is the MSC4075 event type for RTC (call) notifications.
-var EventRTCNotification = event.Type{Type: "org.matrix.msc4075.rtc.notification", Class: event.MessageEventType}
-
-const (
-	rtcNotificationTypeRing   = "ring"
-	rtcNotificationTypeNotify = "notification"
-)
-
-type rtcNotificationContent struct {
-	NotificationType string           `json:"notification_type"`
-	Intent           string           `json:"m.call.intent"`
-	SenderTS         int64            `json:"sender_ts"`
-	Lifetime         int64            `json:"lifetime"`
-	RelatesTo        *event.RelatesTo `json:"m.relates_to"`
-	Mentions         *event.Mentions  `json:"m.mentions"`
-}
-
-func rtcNotificationText(notificationType, intent string) string {
-	video := intent == "video"
-	if notificationType == rtcNotificationTypeRing {
-		if video {
-			return "Incoming video call"
-		}
-		return "Incoming call"
-	}
-	if video {
-		return "Started a video call"
-	}
-	return "Started a call"
-}
-
-// rtcNotificationExpiry calculates when an RTC notification stops being relevant.
-// sender_ts is the sender's clock rather than the server's, but it's what the lifetime is
-// relative to. Senders that don't include it fall back to the event timestamp.
-func rtcNotificationExpiry(senderTS, lifetime, eventTS int64) (time.Time, bool) {
-	if lifetime <= 0 {
-		return time.Time{}, false
-	}
-	if senderTS == 0 {
-		senderTS = eventTS
-	}
-	return time.UnixMilli(senderTS + lifetime), true
-}
-
-func (gmx *Gomuks) formatRTCNotification(ctx context.Context, notif jsoncmd.SyncNotification, rawContent json.RawMessage) *PushNewMessage {
-	var content rtcNotificationContent
-	err := json.Unmarshal(rawContent, &content)
-	if err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).
-			Stringer("event_id", notif.Event.ID).
-			Msg("Failed to unmarshal RTC notification content to format push notification")
-		return nil
-	}
-	if content.NotificationType == "" {
-		return nil
-	}
-	rtc := &PushRTCNotification{
-		Type:   content.NotificationType,
-		Intent: content.Intent,
-	}
-	if content.RelatesTo != nil && content.RelatesTo.Type == event.RelReference {
-		rtc.CallID = content.RelatesTo.EventID
-	}
-	if expiry, ok := rtcNotificationExpiry(content.SenderTS, content.Lifetime, notif.Event.Timestamp.UnixMilli()); ok {
-		if expiry.Before(time.Now()) {
-			// Syncing after being offline for a while can replay call notifications that are long
-			// dead, and there's nothing useful to show for those.
-			zerolog.Ctx(ctx).Debug().
-				Stringer("event_id", notif.Event.ID).
-				Time("expiry", expiry).
-				Msg("Skipping push for expired RTC notification")
-			return nil
-		}
-		rtc.ExpiresAt = ptr.Ptr(jsontime.UM(expiry))
-	}
-	msg := gmx.newPushNewMessage(
-		ctx, notif, rtcNotificationText(content.NotificationType, content.Intent), "",
-		content.Mentions.Has(gmx.Client.Account.UserID), false,
-	)
-	msg.RTC = rtc
-	return msg
-}
-
 func (gmx *Gomuks) formatPushNotificationMessage(ctx context.Context, notif jsoncmd.SyncNotification) *PushNewMessage {
 	evtType := notif.Event.GetType()
 	rawContent := notif.Event.Content
 	if notif.Event.Decrypted != nil {
 		rawContent = notif.Event.Decrypted
 	}
-	if evtType == event.EventReaction {
-		text := gmx.formatReactionNotificationText(ctx, notif, rawContent)
-		if text == "" {
-			return nil
-		}
-		return gmx.newPushNewMessage(ctx, notif, text, "", false, false)
-	}
-	if evtType == EventRTCNotification {
-		return gmx.formatRTCNotification(ctx, notif, rawContent)
+	if msg, handled := gmx.formatForkPushNotification(ctx, notif, evtType, rawContent); handled {
+		return msg
 	}
 	if evtType != event.EventMessage && evtType != event.EventSticker {
 		return nil
@@ -321,31 +157,7 @@ func (gmx *Gomuks) formatPushNotificationMessage(ctx context.Context, notif json
 			Msg("Failed to unmarshal message content to format push notification")
 		return nil
 	}
-	var image string
-	if content.MsgType == event.MsgImage || evtType == event.EventSticker {
-		if content.File != nil && content.File.URL != "" {
-			parsed := content.File.URL.ParseOrIgnore()
-			if len(content.File.URL) < 255 && parsed.IsValid() {
-				image = fmt.Sprintf("_gomuks/media/%s/%s?encrypted=true", parsed.Homeserver, parsed.FileID)
-			}
-		} else if content.URL != "" {
-			parsed := content.URL.ParseOrIgnore()
-			if len(content.URL) < 255 && parsed.IsValid() {
-				image = fmt.Sprintf("_gomuks/media/%s/%s?encrypted=false", parsed.Homeserver, parsed.FileID)
-			}
-		}
-	}
-	return gmx.newPushNewMessage(
-		ctx, notif, notif.Event.LocalContent.PreviewText, image,
-		content.Mentions.Has(gmx.Client.Account.UserID),
-		content.RelatesTo.GetNonFallbackReplyTo() != "",
-	)
-}
-
-func (gmx *Gomuks) newPushNewMessage(
-	ctx context.Context, notif jsoncmd.SyncNotification, text, image string, mention, reply bool,
-) *PushNewMessage {
-	var roomAvatar string
+	var roomAvatar, image string
 	isDM := ptr.Val(notif.Room.DMUserID) != ""
 	if notif.Room.Avatar != nil {
 		avatarIdent := notif.Room.ID.String()
@@ -361,6 +173,19 @@ func (gmx *Gomuks) newPushNewMessage(
 	if len(roomName) > 50 {
 		roomName = roomName[:50] + "…"
 	}
+	if content.MsgType == event.MsgImage || evtType == event.EventSticker {
+		if content.File != nil && content.File.URL != "" {
+			parsed := content.File.URL.ParseOrIgnore()
+			if len(content.File.URL) < 255 && parsed.IsValid() {
+				image = fmt.Sprintf("_gomuks/media/%s/%s?encrypted=true", parsed.Homeserver, parsed.FileID)
+			}
+		} else if content.URL != "" {
+			parsed := content.URL.ParseOrIgnore()
+			if len(content.URL) < 255 && parsed.IsValid() {
+				image = fmt.Sprintf("_gomuks/media/%s/%s?encrypted=false", parsed.Homeserver, parsed.FileID)
+			}
+		}
+	}
 	return &PushNewMessage{
 		Timestamp:  notif.Event.Timestamp,
 		EventID:    notif.Event.ID,
@@ -373,10 +198,10 @@ func (gmx *Gomuks) newPushNewMessage(
 		Sender:     gmx.getNotificationUser(ctx, notif.Room.ID, notif.Event.Sender),
 		Self:       gmx.getNotificationUser(ctx, notif.Room.ID, gmx.Client.Account.UserID),
 
-		Text:    text,
+		Text:    notif.Event.LocalContent.PreviewText,
 		Image:   image,
-		Mention: mention,
-		Reply:   reply,
+		Mention: content.Mentions.Has(gmx.Client.Account.UserID),
+		Reply:   content.RelatesTo.GetNonFallbackReplyTo() != "",
 		Sound:   notif.Sound,
 	}
 }
