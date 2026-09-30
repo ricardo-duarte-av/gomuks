@@ -15,8 +15,9 @@ on:
 
 env:
   UPSTREAM: https://github.com/gomuks/gomuks.git
-  # The branch carrying local patches on top of upstream main. The mirror branch
-  # is only ever fast-forwarded from upstream, so it stays a clean mirror.
+  # The branch carrying local patches, with upstream main merged into it. The
+  # mirror branch is only ever fast-forwarded from upstream, so it stays a clean
+  # mirror.
   MIRROR_BRANCH: ${{ inputs.mirror_branch || 'main' }}
   FEATURE_BRANCH: ${{ inputs.feature_branch || 'dev' }}
   GOTOOLCHAIN: local
@@ -24,7 +25,7 @@ env:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    name: Sync main and rebase dev
+    name: Sync main and merge into dev
     permissions:
       contents: write
       issues: write
@@ -85,29 +86,39 @@ jobs:
             exit 1
           fi
 
-      - name: Rebase feature branch onto the mirror
-        id: rebase
-        if: steps.ff.outputs.updated == 'true'
+      - name: Merge the mirror into the feature branch
+        id: merge
+        # Also runs when main was already current, so that a previously failed merge
+        # is retried once dev has been fixed, instead of waiting for a new upstream commit.
+        if: steps.ff.outcome == 'success'
         run: |
           git checkout -B "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH"
-          if git rebase "$MIRROR_BRANCH"; then
+          # Merge rather than rebase: dev has merge commits, and a rebase would drop
+          # them and make every previously resolved conflict come back.
+          if git merge-base --is-ancestor "$MIRROR_BRANCH" "$FEATURE_BRANCH"; then
+            echo "$FEATURE_BRANCH already contains $MIRROR_BRANCH"
             echo "clean=true" >> "$GITHUB_OUTPUT"
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+          elif git merge --no-edit "$MIRROR_BRANCH"; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+            echo "merged=true" >> "$GITHUB_OUTPUT"
           else
-            git rebase --abort
+            git diff --name-only --diff-filter=U | sed 's/^/::warning::Conflict in /'
+            git merge --abort
             echo "clean=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Rebase of $FEATURE_BRANCH onto $MIRROR_BRANCH conflicts"
+            echo "::warning::Merging $MIRROR_BRANCH into $FEATURE_BRANCH conflicts"
           fi
 
       - name: Set up Go
-        if: steps.rebase.outputs.clean == 'true'
+        if: steps.merge.outputs.merged == 'true'
         uses: actions/setup-go@v6
         with:
           go-version: "1.26"
           cache: true
 
-      - name: Verify the rebased branch
+      - name: Verify the merged branch
         id: verify
-        if: steps.rebase.outputs.clean == 'true'
+        if: steps.merge.outputs.merged == 'true'
         continue-on-error: true
         run: |
           mkdir -p web/dist && touch web/dist/empty
@@ -115,14 +126,14 @@ jobs:
           go test -tags "sqlite_fts5 goolm" ./...
           rm -f web/dist/empty
 
-      - name: Push the rebased branch
-        if: steps.rebase.outputs.clean == 'true' && steps.verify.outcome == 'success'
+      - name: Push the merged branch
+        if: steps.merge.outputs.merged == 'true' && steps.verify.outcome == 'success'
         run: |
-          git push --force-with-lease origin "$FEATURE_BRANCH"
+          git push origin "$FEATURE_BRANCH"
 
       - name: Rebuild the image
         # Pushes made with GITHUB_TOKEN don't trigger workflows, so ask for the build explicitly.
-        if: steps.rebase.outputs.clean == 'true' && steps.verify.outcome == 'success'
+        if: steps.merge.outputs.merged == 'true' && steps.verify.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -131,9 +142,10 @@ jobs:
             -f "ref=$FEATURE_BRANCH"
 
       - name: Open an issue if the sync needs a human
-        if: failure() || steps.rebase.outputs.clean == 'false' || steps.verify.outcome == 'failure'
+        if: failure() || steps.merge.outputs.clean == 'false' || steps.verify.outcome == 'failure'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN is refused issue creation on this fork, so use the PAT.
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           title="Upstream sync needs attention"
@@ -143,19 +155,18 @@ jobs:
           fi
           if [ "${{ steps.ff.outputs.diverged }}" = "true" ]; then
             reason="\`$MIRROR_BRANCH\` has diverged from upstream and cannot be fast-forwarded."
-          elif [ "${{ steps.rebase.outputs.clean }}" = "false" ]; then
-            reason="Rebasing \`$FEATURE_BRANCH\` onto the new \`$MIRROR_BRANCH\` hit conflicts."
+          elif [ "${{ steps.merge.outputs.clean }}" = "false" ]; then
+            reason="Merging the new \`$MIRROR_BRANCH\` into \`$FEATURE_BRANCH\` hit conflicts."
           else
-            reason="\`$FEATURE_BRANCH\` rebased cleanly, but the build or tests failed against the new \`$MIRROR_BRANCH\`."
+            reason="\`$MIRROR_BRANCH\` merged into \`$FEATURE_BRANCH\` cleanly, but the build or tests failed."
           fi
           {
             printf '%s\n\n' "$reason"
             printf '`%s` was left untouched. Resolve it locally:\n\n' "$FEATURE_BRANCH"
-            printf '```sh\ngit fetch origin\ngit rebase origin/%s %s\n```\n\n' "$MIRROR_BRANCH" "$FEATURE_BRANCH"
+            printf '```sh\ngit fetch origin\ngit checkout %s\ngit merge origin/%s\n```\n\n' "$FEATURE_BRANCH" "$MIRROR_BRANCH"
             printf '[Workflow run](%s)\n' "$RUN_URL"
           } > /tmp/issue-body.md
-          # Forks restrict issue creation with GITHUB_TOKEN, so make sure the reason
-          # is visible in the run itself even when filing the issue isn't allowed.
+          # Make sure the reason is visible in the run itself even if filing the issue fails.
           echo "::error::$reason"
           gh issue create --title "$title" --body-file /tmp/issue-body.md || true
           exit 1
