@@ -23,6 +23,7 @@ import {
 	EventID,
 	EventRowID,
 	EventType,
+	GetLocalAliasesResponse,
 	GetMentionsResponse,
 	GetOwnDevicesResponse,
 	GetProfileResponse,
@@ -62,6 +63,7 @@ import {
 	RespOpenIDToken,
 	RespRTCTransports,
 	RespRoomJoin,
+	RespSendEvent,
 	RespSpaceHierarchy,
 	RespTurnServer,
 	RoomAlias,
@@ -242,7 +244,7 @@ export default abstract class RPCClient {
 		return this.request("report_event", { room_id, event_id, reason })
 	}
 
-	redactEvent(room_id: RoomID, event_id: EventID, reason: string): Promise<void> {
+	redactEvent(room_id: RoomID, event_id: EventID, reason: string): Promise<RespSendEvent> {
 		return this.request("redact_event", { room_id, event_id, reason })
 	}
 
@@ -443,6 +445,18 @@ export default abstract class RPCClient {
 
 	resolveAlias(alias: RoomAlias): Promise<ResolveAliasResponse> {
 		return this.request("resolve_alias", { alias })
+	}
+
+	getLocalAliases(room_id: RoomID): Promise<GetLocalAliasesResponse> {
+		return this.request("get_local_aliases", { room_id })
+	}
+
+	createAlias(alias: RoomAlias, room_id: RoomID, delete_first: boolean = false): Promise<void> {
+		return this.request("create_alias", { alias, room_id, delete_first })
+	}
+
+	deleteAlias(alias: RoomAlias): Promise<void> {
+		return this.request("delete_alias", { alias })
 	}
 
 	discoverHomeserver(user_id: UserID): Promise<ClientWellKnown> {

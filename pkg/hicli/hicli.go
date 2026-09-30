@@ -60,6 +60,8 @@ type HiClient struct {
 	syncErrors int
 	lastSync   time.Time
 
+	RequestTimeout time.Duration
+
 	ToDeviceInSync atomic.Bool
 
 	EventHandler func(evt any)
@@ -222,6 +224,7 @@ func New(rawDB, cryptoDB *dbutil.Database, log zerolog.Logger, pickleKey []byte,
 func (h *HiClient) saveOAuthTokens(ctx context.Context, refreshToken, accessToken string, expiry time.Time) error {
 	acc := h.Account
 	if acc == nil {
+		zerolog.Ctx(ctx).Warn().Msg("No account, not saving oauth tokens")
 		return nil
 	}
 	acc.RefreshToken = refreshToken

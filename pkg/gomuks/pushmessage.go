@@ -45,14 +45,15 @@ type PushNewMessage struct {
 	RoomID     id.RoomID        `json:"room_id"`
 	RoomName   string           `json:"room_name"`
 	RoomAvatar string           `json:"room_avatar,omitempty"`
+	IsDM       bool             `json:"is_dm,omitzero"`
 	Sender     NotificationUser `json:"sender"`
 	Self       NotificationUser `json:"self"`
 
 	Text    string `json:"text"`
 	Image   string `json:"image,omitempty"`
-	Mention bool   `json:"mention,omitempty"`
-	Reply   bool   `json:"reply,omitempty"`
-	Sound   bool   `json:"sound,omitempty"`
+	Mention bool   `json:"mention,omitzero"`
+	Reply   bool   `json:"reply,omitzero"`
+	Sound   bool   `json:"sound,omitzero"`
 
 	RTC *PushRTCNotification `json:"rtc,omitempty"`
 }
@@ -345,9 +346,10 @@ func (gmx *Gomuks) newPushNewMessage(
 	ctx context.Context, notif jsoncmd.SyncNotification, text, image string, mention, reply bool,
 ) *PushNewMessage {
 	var roomAvatar string
+	isDM := ptr.Val(notif.Room.DMUserID) != ""
 	if notif.Room.Avatar != nil {
 		avatarIdent := notif.Room.ID.String()
-		if ptr.Val(notif.Room.DMUserID) != "" {
+		if isDM {
 			avatarIdent = notif.Room.DMUserID.String()
 		}
 		roomAvatar = getAvatarLinkForNotification(ptr.Val(notif.Room.Name), avatarIdent, notif.Room.Avatar.CUString())
@@ -367,6 +369,7 @@ func (gmx *Gomuks) newPushNewMessage(
 		RoomID:     notif.Room.ID,
 		RoomName:   roomName,
 		RoomAvatar: roomAvatar,
+		IsDM:       isDM,
 		Sender:     gmx.getNotificationUser(ctx, notif.Room.ID, notif.Event.Sender),
 		Self:       gmx.getNotificationUser(ctx, notif.Room.ID, gmx.Client.Account.UserID),
 

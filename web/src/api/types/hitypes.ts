@@ -135,6 +135,7 @@ export interface BaseDBEvent {
 	send_error?: string
 
 	reactions?: Record<string, number>
+	own_reactions?: Record<string, EventID[]>
 	last_edit_rowid?: EventRowID
 	unread_type: UnreadType
 
@@ -229,6 +230,10 @@ export interface GetMentionsResponse {
 export interface ResolveAliasResponse {
 	room_id: RoomID
 	servers: string[]
+}
+
+export interface GetLocalAliasesResponse {
+	aliases: RoomAlias[]
 }
 
 export interface LoginFlowsResponse {

@@ -136,10 +136,12 @@ func (rs *RoomStore) notifyTimelineWatchers() {
 func (rs *RoomStore) ApplySync(sync *jsoncmd.SyncRoom) {
 	rs.lock.Lock()
 	defer rs.lock.Unlock()
-	if !rs.Meta.Current().VisibleMetaIsEqual(sync.Meta) {
-		rs.Meta.Emit(sync.Meta)
-	} else {
-		rs.Meta.SetCurrent(sync.Meta)
+	if sync.Meta != nil {
+		if !rs.Meta.Current().VisibleMetaIsEqual(sync.Meta) {
+			rs.Meta.Emit(sync.Meta)
+		} else {
+			rs.Meta.SetCurrent(sync.Meta)
+		}
 	}
 	for _, evt := range sync.Events {
 		rs.applyEvent(evt, false)
@@ -332,7 +334,7 @@ func (rs *RoomStore) applyEvent(evt *database.Event, pending bool) {
 	} else if evt.RelationType == event.RelReplace && evt.RelatesTo != "" {
 		editTarget, ok := rs.eventsByID[evt.RelatesTo]
 		if ok && editTarget.LastEditRowID != nil && *editTarget.LastEditRowID != 0 && *editTarget.LastEditRowID == evt.RowID {
-			editTarget.LastEditRef = editTarget
+			editTarget.LastEditRef = evt
 			rs.EventSubs.Notify(editTarget.ID)
 		}
 	}

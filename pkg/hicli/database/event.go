@@ -27,11 +27,13 @@ import (
 )
 
 const (
+	// N.B. timeline.go and state.go also have event column queries
 	getEventBaseQuery = `
 		SELECT rowid, -1,
 		       room_id, event_id, sender, type, state_key, timestamp, content, decrypted, decrypted_type,
 		       unsigned, local_content, transaction_id, redacted_by, relates_to, relation_type,
-		       megolm_session_id, decryption_error, send_error, reactions, last_edit_rowid, unread_type, sticky_duration
+		       megolm_session_id, decryption_error, send_error, reactions, own_reactions, last_edit_rowid,
+		       unread_type, sticky_duration
 		FROM event
 	`
 	getEventByRowID                  = getEventBaseQuery + `WHERE rowid = $1`
@@ -62,9 +64,10 @@ const (
 		INSERT INTO event (
 			room_id, event_id, sender, type, state_key, timestamp, content, decrypted, decrypted_type,
 			unsigned, local_content, transaction_id, redacted_by, relates_to, relation_type,
-			megolm_session_id, decryption_error, send_error, reactions, last_edit_rowid, unread_type, sticky_duration
+			megolm_session_id, decryption_error, send_error, reactions, own_reactions, last_edit_rowid,
+			unread_type, sticky_duration
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 	`
 	insertEventQuery = insertEventBaseQuery + `RETURNING rowid`
 	upsertEventQuery = insertEventBaseQuery + `
@@ -88,30 +91,30 @@ const (
 	updateEventDecryptedQuery        = `UPDATE event SET decrypted = $2, decrypted_type = $3, decryption_error = NULL, unread_type = $4, local_content = $5 WHERE rowid = $1`
 	updateEventLocalContentQuery     = `UPDATE event SET local_content = $2 WHERE rowid = $1`
 	updateEventEncryptedContentQuery = `UPDATE event SET content = $2, megolm_session_id = $3 WHERE rowid = $1`
-	getEventReactionsQuery           = getEventBaseQuery + `
+	getEventReactionsQuery           = `
+		SELECT
+			relates_to,
+			content->>'$."m.relates_to".key' AS reaction,
+			COUNT(*),
+			json_group_array(event_id) FILTER (WHERE sender IN (SELECT user_id FROM account))
+		FROM event INDEXED BY event_relates_to_idx
 		WHERE room_id = ?
 		  AND type = 'm.reaction'
 		  AND relation_type = 'm.annotation'
 		  AND redacted_by IS NULL
 		  AND relates_to IN (%s)
-	`
-	getEventEditRowIDsQuery = `
-		SELECT main.event_id, edit.rowid
-		FROM event main
-		JOIN event edit INDEXED BY event_relates_to_idx ON
-			edit.room_id = main.room_id
-			AND edit.relates_to = main.event_id
-			AND edit.relation_type = 'm.replace'
-			AND edit.type = main.type
-			AND edit.sender = main.sender
-			AND edit.redacted_by IS NULL
-		WHERE main.room_id = ? AND main.event_id IN (%s)
-		ORDER BY main.event_id, edit.timestamp
+		  AND event_id NOT LIKE '~%%'
+		GROUP BY 1, 2
 	`
 	setLastEditRowIDQuery = `
-		UPDATE event SET last_edit_rowid = $3 WHERE room_id = $1 AND event_id = $2
+		UPDATE event
+		SET last_edit_rowid = $7
+		WHERE rowid = $1 AND room_id = $2 AND event_id = $3 AND type = $4 AND sender = $5
+		  AND (relation_type IS NULL OR relation_type NOT IN ('m.replace', 'm.annotation'))
+		  AND $6 > COALESCE((SELECT prev_edit.timestamp FROM event prev_edit WHERE prev_edit.rowid = event.last_edit_rowid), 0)
+		  AND last_edit_rowid <> $7
 	`
-	updateReactionCountsQuery = `UPDATE event SET reactions = $3 WHERE room_id = $1 AND event_id = $2`
+	updateReactionCountsQuery = `UPDATE event SET reactions = $3, own_reactions = $4 WHERE room_id = $1 AND event_id = $2`
 )
 
 type EventQuery struct {
@@ -242,8 +245,8 @@ func (eq *EventQuery) Insert(ctx context.Context, evt *Event) (rowID EventRowID,
 }
 
 var stateEventMassInserter = dbutil.NewMassInsertBuilder[*Event, [1]any](
-	strings.ReplaceAll(upsertEventQuery, "($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)", "($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"),
-	"($1, $%d, $%d, $%d, $%d, $%d, $%d, NULL, NULL, $%d, NULL, $%d, $%d, NULL, NULL, NULL, NULL, NULL, '{}', 0, 0, NULL)",
+	strings.ReplaceAll(upsertEventQuery, "($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)", "($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"),
+	"($1, $%d, $%d, $%d, $%d, $%d, $%d, NULL, NULL, $%d, NULL, $%d, $%d, NULL, NULL, NULL, NULL, NULL, '{}', NULL, 0, 0, NULL)",
 )
 
 var massInsertConverter = dbutil.ConvertRowFn[EventRowID](dbutil.ScanSingleColumn[EventRowID])
@@ -306,60 +309,29 @@ func (eq *EventQuery) FillReactionCounts(ctx context.Context, roomID id.RoomID, 
 	eventIDs := make([]id.EventID, 0, len(events))
 	eventMap := make(map[id.EventID]*Event)
 	for _, evt := range events {
-		if evt.Reactions == nil {
-			eventIDs = append(eventIDs, evt.ID)
-			eventMap[evt.ID] = evt
-		}
+		eventIDs = append(eventIDs, evt.ID)
+		eventMap[evt.ID] = evt
 	}
 	if len(eventIDs) == 0 {
 		return nil
 	}
-	result, err := eq.GetReactions(ctx, roomID, eventIDs...)
+	result, err := eq.getReactionCounts(ctx, roomID, eventIDs...)
 	if err != nil {
 		return err
 	}
 	for evtID, res := range result {
-		eventMap[evtID].Reactions = res.Counts
+		eventMap[evtID].Reactions = res.counts
+		eventMap[evtID].OwnReactions = res.ownIDs
 	}
 	return nil
 }
 
-func (eq *EventQuery) FillLastEditRowIDs(ctx context.Context, roomID id.RoomID, events []*Event) error {
-	eventIDs := make([]id.EventID, len(events))
-	eventMap := make(map[id.EventID]*Event)
-	for i, evt := range events {
-		if evt.LastEditRowID == nil {
-			eventIDs[i] = evt.ID
-			eventMap[evt.ID] = evt
-		}
-	}
-	return eq.GetDB().DoTxn(ctx, nil, func(ctx context.Context) error {
-		result, err := eq.GetEditRowIDs(ctx, roomID, eventIDs...)
-		if err != nil {
-			return err
-		}
-		for evtID, res := range result {
-			lastEditRowID := res[len(res)-1]
-			eventMap[evtID].LastEditRowID = &lastEditRowID
-			delete(eventMap, evtID)
-			err = eq.Exec(ctx, setLastEditRowIDQuery, roomID, evtID, lastEditRowID)
-			if err != nil {
-				return err
-			}
-		}
-		var zero EventRowID
-		for evtID, evt := range eventMap {
-			evt.LastEditRowID = &zero
-			err = eq.Exec(ctx, setLastEditRowIDQuery, roomID, evtID, zero)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+func (eq *EventQuery) UpdateLastEdit(ctx context.Context, target, edit *Event) error {
+	return eq.Exec(
+		ctx, setLastEditRowIDQuery,
+		target.RowID, edit.RoomID, edit.RelatesTo, edit.Type, edit.Sender, edit.Timestamp, edit.RowID,
+	)
 }
-
-var reactionKeyPath = exgjson.Path("m.relates_to", "key")
 
 type GetReactionsResult struct {
 	Events []*Event
@@ -377,48 +349,54 @@ func buildMultiEventGetFunction[T any](preParams []any, eventIDs []T, query stri
 	return fmt.Sprintf(query, placeholders), params
 }
 
-type editRowIDTuple struct {
-	eventID   id.EventID
-	editRowID EventRowID
+type reactionRowTuple struct {
+	relatesTo id.EventID
+	key       string
+	count     int
+	ownIDs    []id.EventID
 }
 
-func (eq *EventQuery) GetEditRowIDs(ctx context.Context, roomID id.RoomID, eventIDs ...id.EventID) (map[id.EventID][]EventRowID, error) {
-	query, params := buildMultiEventGetFunction([]any{roomID}, eventIDs, getEventEditRowIDsQuery)
-	rows, err := eq.GetDB().Query(ctx, query, params...)
-	output := make(map[id.EventID][]EventRowID)
-	return output, dbutil.NewRowIterWithError(rows, func(row dbutil.Scannable) (tuple editRowIDTuple, err error) {
-		err = row.Scan(&tuple.eventID, &tuple.editRowID)
-		return
-	}, err).Iter(func(tuple editRowIDTuple) (bool, error) {
-		output[tuple.eventID] = append(output[tuple.eventID], tuple.editRowID)
-		return true, nil
-	})
+var scanReactionRowTuple = dbutil.ConvertRowFn[reactionRowTuple](func(row dbutil.Scannable) (reactionRowTuple, error) {
+	var t reactionRowTuple
+	err := row.Scan(&t.relatesTo, &t.key, &t.count, dbutil.JSON{Data: &t.ownIDs})
+	return t, err
+})
+
+type reactionCountsItem struct {
+	counts map[string]int
+	ownIDs map[string][]id.EventID
 }
 
-func (eq *EventQuery) GetReactions(ctx context.Context, roomID id.RoomID, eventIDs ...id.EventID) (map[id.EventID]*GetReactionsResult, error) {
-	result := make(map[id.EventID]*GetReactionsResult, len(eventIDs))
+func (eq *EventQuery) getReactionCounts(ctx context.Context, roomID id.RoomID, eventIDs ...id.EventID) (map[id.EventID]reactionCountsItem, error) {
+	result := make(map[id.EventID]reactionCountsItem, len(eventIDs))
 	for _, evtID := range eventIDs {
-		result[evtID] = &GetReactionsResult{Counts: make(map[string]int)}
+		result[evtID] = reactionCountsItem{
+			counts: make(map[string]int),
+			ownIDs: make(map[string][]id.EventID),
+		}
 	}
 	return result, eq.GetDB().DoTxn(ctx, nil, func(ctx context.Context) error {
 		query, params := buildMultiEventGetFunction([]any{roomID}, eventIDs, getEventReactionsQuery)
-		events, err := eq.QueryMany(ctx, query, params...)
+		err := scanReactionRowTuple.NewRowIter(eq.GetDB().Query(ctx, query, params...)).Iter(func(tuple reactionRowTuple) (bool, error) {
+			result[tuple.relatesTo].counts[tuple.key] = tuple.count
+			if len(tuple.ownIDs) > 0 {
+				result[tuple.relatesTo].ownIDs[tuple.key] = tuple.ownIDs
+			}
+			return true, nil
+		})
 		if err != nil {
 			return err
-		} else if len(events) == 0 {
-			return nil
 		}
-		for _, evt := range events {
-			dest := result[evt.RelatesTo]
-			dest.Events = append(dest.Events, evt)
-			keyRes := gjson.GetBytes(evt.Content, reactionKeyPath)
-			if keyRes.Type == gjson.String {
-				dest.Counts[keyRes.Str]++
-			}
-		}
-		for evtID, res := range result {
-			if len(res.Counts) > 0 {
-				err = eq.Exec(ctx, updateReactionCountsQuery, roomID, evtID, dbutil.JSON{Data: &res.Counts})
+		for evtID, counts := range result {
+			if len(counts.counts) > 0 {
+				err = eq.Exec(
+					ctx,
+					updateReactionCountsQuery,
+					roomID,
+					evtID,
+					dbutil.JSON{Data: &counts.counts},
+					dbutil.JSON{Data: &counts.ownIDs},
+				)
 				if err != nil {
 					return err
 				}
@@ -501,9 +479,10 @@ type Event struct {
 	DecryptionError string       `json:"decryption_error,omitempty"`
 	SendError       string       `json:"send_error,omitempty"`
 
-	Reactions     map[string]int `json:"reactions,omitempty"`
-	LastEditRowID *EventRowID    `json:"last_edit_rowid,omitempty"`
-	UnreadType    UnreadType     `json:"unread_type,omitempty"`
+	Reactions     map[string]int          `json:"reactions,omitempty"`
+	OwnReactions  map[string][]id.EventID `json:"own_reactions,omitempty"`
+	LastEditRowID *EventRowID             `json:"last_edit_rowid,omitempty"`
+	UnreadType    UnreadType              `json:"unread_type,omitempty"`
 
 	StickyDuration jsontime.Milliseconds `json:"sticky_duration_ms,omitzero"`
 
@@ -648,6 +627,7 @@ func (e *Event) Scan(row dbutil.Scannable) (*Event, error) {
 		&decryptionError,
 		&sendError,
 		dbutil.JSON{Data: &e.Reactions},
+		dbutil.JSON{Data: &e.OwnReactions},
 		&e.LastEditRowID,
 		&e.UnreadType,
 		&stickyDuration,
@@ -711,9 +691,12 @@ func (e *Event) GetReplyTo() id.EventID {
 }
 
 func (e *Event) sqlVariables() []any {
-	var reactions any
+	var reactions, ownReactions any
 	if e.Reactions != nil {
 		reactions = e.Reactions
+	}
+	if len(e.OwnReactions) > 0 {
+		ownReactions = e.OwnReactions
 	}
 	return []any{
 		e.RoomID,
@@ -735,6 +718,7 @@ func (e *Event) sqlVariables() []any {
 		dbutil.StrPtr(e.DecryptionError),
 		dbutil.StrPtr(e.SendError),
 		dbutil.JSON{Data: reactions},
+		dbutil.JSON{Data: ownReactions},
 		e.LastEditRowID,
 		e.UnreadType,
 		dbutil.NumPtr(e.StickyDuration.Milliseconds()),
