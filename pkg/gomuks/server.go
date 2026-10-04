@@ -31,6 +31,7 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -80,6 +81,9 @@ const metaTagsTemplate = `
 	<meta name="gomuks-frontend-etag" content="%s">
 	<meta name="gomuks-version-description" content="%s">
 	<meta name="gomuks-vapid-key" content="%s">
+	<script>
+		window.gomuksDefaultConfig = %s
+	</script>
 `
 
 func (gmx *Gomuks) StartServer() {
@@ -115,26 +119,42 @@ func (gmx *Gomuks) StartServer() {
 				html.EscapeString(gmx.frontendETag),
 				html.EscapeString(version.Gomuks.VersionDescription),
 				gmx.Config.Push.VAPIDPublicKey,
+				exerrors.Must(json.Marshal(gmx.Config.Web.DefaultPreferences)),
 			)),
 			1,
 		)
+		gmx.indexETag = fmt.Sprintf(`"%x"`, sha256.Sum256(gmx.indexWithMeta))
 	}
 	gmx.Server = &http.Server{Handler: router, Protocols: &http.Protocols{}}
 	gmx.Server.Protocols.SetHTTP1(true)
-	gmx.Server.Protocols.SetUnencryptedHTTP2(true)
+	enableTLS := gmx.Config.Web.TLSCertFile != "" && gmx.Config.Web.TLSKeyFile != ""
+	gmx.Server.Protocols.SetUnencryptedHTTP2(!enableTLS)
+	gmx.Server.Protocols.SetHTTP2(enableTLS)
 	gmx.Log.Info().Str("address", gmx.Config.Web.ListenAddress).Msg("Starting server")
-	ln, err := net.Listen("tcp", gmx.Config.Web.ListenAddress)
-	if err != nil {
-		panic(err)
+	var ln net.Listener
+	if strings.HasPrefix(gmx.Config.Web.ListenAddress, "unix:") {
+		socketPath := strings.TrimPrefix(gmx.Config.Web.ListenAddress, "unix:")
+		if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			gmx.Log.Err(err).Str("socket_path", socketPath).Msg("Failed to remove existing socket file")
+		}
+		ln = exerrors.Must(net.Listen("unix", socketPath))
+	} else {
+		ln = exerrors.Must(net.Listen("tcp", gmx.Config.Web.ListenAddress))
 	}
 	gmx.Server.Addr = ln.Addr().String()
 	go func() {
-		err = gmx.Server.Serve(ln)
+		var err error
+		if enableTLS {
+			err = gmx.Server.ServeTLS(ln, gmx.Config.Web.TLSCertFile, gmx.Config.Web.TLSKeyFile)
+		} else {
+			err = gmx.Server.Serve(ln)
+		}
+		_ = ln.Close()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			panic(err)
 		}
 	}()
-	gmx.Log.Info().Str("address", gmx.Server.Addr).Msg("Server started")
+	gmx.Log.Info().Str("address", gmx.Server.Addr).Bool("tls", enableTLS).Msg("Server started")
 	if gmx.DesktopKey != "" {
 		out := exerrors.Must(json.Marshal(map[string]any{"started": true, "address": gmx.Server.Addr}))
 		fmt.Printf("%s\n", out)
@@ -143,22 +163,27 @@ func (gmx *Gomuks) StartServer() {
 
 func (gmx *Gomuks) FrontendCacheMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if gmx.frontendETag != "" && r.Header.Get("If-None-Match") == gmx.frontendETag {
+		if r.URL.Path != "/" && gmx.frontendETag != "" && r.Header.Get("If-None-Match") == gmx.frontendETag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		} else if r.URL.Path == "/" && gmx.indexETag != "" && r.Header.Get("If-None-Match") == gmx.indexETag {
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/assets/") {
 			w.Header().Set("Cache-Control", "max-age=604800, immutable")
 		}
-		if gmx.frontendETag != "" {
-			w.Header().Set("ETag", gmx.frontendETag)
-		}
 		if r.URL.Path == "/" {
 			w.Header().Set("Content-Type", "text/html")
 			w.Header().Set("Content-Length", strconv.Itoa(len(gmx.indexWithMeta)))
+			if gmx.indexETag != "" {
+				w.Header().Set("ETag", gmx.indexETag)
+			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(gmx.indexWithMeta)
 			return
+		} else if gmx.frontendETag != "" {
+			w.Header().Set("ETag", gmx.frontendETag)
 		}
 		next.ServeHTTP(w, r)
 	})

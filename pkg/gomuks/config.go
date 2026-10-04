@@ -65,6 +65,8 @@ type MediaConfig struct {
 
 type WebConfig struct {
 	ListenAddress   string   `yaml:"listen_address"`
+	TLSCertFile     string   `yaml:"tls_cert_file"`
+	TLSKeyFile      string   `yaml:"tls_key_file"`
 	Username        string   `yaml:"username"`
 	PasswordHash    string   `yaml:"password_hash"`
 	TokenKey        string   `yaml:"token_key"`
@@ -72,6 +74,8 @@ type WebConfig struct {
 	EventBufferSize int      `yaml:"event_buffer_size"`
 	OriginPatterns  []string `yaml:"origin_patterns"`
 	InsecureCookies bool     `yaml:"insecure_cookies"`
+
+	DefaultPreferences map[string]any `yaml:"default_preferences,omitempty"`
 
 	DisableAuthBecauseIWantMyAccountToBeHacked bool `yaml:"disable_auth_because_i_want_my_account_to_be_hacked,omitempty"`
 }

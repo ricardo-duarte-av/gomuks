@@ -15,7 +15,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import type { MouseEvent } from "react"
 import { CancellablePromise } from "@/util/promise.ts"
+import { getDisplayname } from "@/util/validation.ts"
 import { CachedEventDispatcher, NonNullCachedEventDispatcher } from "../util/eventdispatcher.ts"
+import { getAvatarThumbnailURL, getRoomAvatarURL } from "./media.ts"
 import RPCClient, { SendMessageParams } from "./rpc.ts"
 import SSEClient from "./sseclient.ts"
 import { RoomStateStore, StateStore, WidgetListener, fakeGomuksSender } from "./statestore"
@@ -167,12 +169,15 @@ export default class Client {
 				return
 			case "share":
 				try {
-					window.mainScreenContext.setPendingShare(new File(
+					const file = "payload" in evtData ? new File(
 						[Uint8Array.fromBase64(evtData.payload)],
 						evtData.name,
 						{ type: evtData.mime_type },
-					))
-					console.info("Received share from Android:", evtData.name, evtData.mime_type)
+					) : null
+					console.info("Received share from Android:", file?.name, file?.type, evtData.room_id, evtData.text)
+					window.mainScreenContextWaiter.then(() => {
+						window.mainScreenContext.setPendingShare({ file, text: evtData.text }, evtData.room_id)
+					})
 				} catch (err) {
 					console.error("Failed to process shared file:", err)
 				}
@@ -206,7 +211,7 @@ export default class Client {
 	}
 
 	registerWebPush = (refresh = false) => {
-		if (!this.store.localPreferenceCache.web_push) {
+		if (!this.store.preferences.web_push) {
 			navigator.serviceWorker.getRegistration("pushmuks").then(reg => {
 				if (reg?.active?.scriptURL.endsWith("/pushmuks-sw.js")) {
 					console.debug("Unregistering push service worker")
@@ -546,6 +551,34 @@ export default class Client {
 		const dbEvent = await this.rpc.sendMessage(params)
 		if (dbEvent) {
 			this.handleOutgoingEvent(dbEvent, room)
+		}
+		if (window.gomuksAndroid) {
+			const dmUserID = room.meta.current.dm_user_id
+			const dmUserProfile = dmUserID
+				? room.getStateEvent("m.room.member", dmUserID)
+				: undefined
+			const onlyRealURL = (url?: string) => url?.startsWith("_gomuks/media") ? url : undefined
+			let roomName = room.meta.current.name || "Unnamed room"
+			if (roomName.length > 50) {
+				roomName = roomName.slice(0, 50) + "…"
+			}
+			window.dispatchEvent(new CustomEvent("GomuksWebMessageToAndroid", {
+				detail: {
+					event: "message_sent",
+					room: {
+						id: room.roomID,
+						name: roomName,
+						avatar: onlyRealURL(getRoomAvatarURL(room.meta.current, undefined, true)),
+					},
+					dm_user: dmUserID ? {
+						id: dmUserID,
+						name: getDisplayname(dmUserID, dmUserProfile?.content),
+						avatar: onlyRealURL(getAvatarThumbnailURL(dmUserID, dmUserProfile?.content)),
+					} : undefined,
+					image_auth: this.store.imageAuthToken,
+				},
+			}))
+			console.log("Notified Android about message send")
 		}
 	}
 

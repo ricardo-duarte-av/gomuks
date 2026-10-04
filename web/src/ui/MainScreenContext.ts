@@ -26,7 +26,14 @@ export interface SetActiveRoomExtra {
 	openEventID?: string | null,
 }
 
+export interface PendingShare {
+	file: File | null
+	text?: string
+}
+
 export interface MainScreenContextFields {
+	isReal: boolean
+
 	setActiveRoom: (roomID: RoomID | null, extra?: SetActiveRoomExtra) => void
 	setSpace: (space: RoomListFilter | null, pushState?: boolean) => void
 	clickRoom: (evt: React.MouseEvent) => void
@@ -37,11 +44,13 @@ export interface MainScreenContextFields {
 	clickRightPanelOpener: (evt: React.MouseEvent) => void
 	get currentRightPanel(): RightPanelProps | null
 
-	setPendingShare: (file: File | null) => void
-	pendingShare: File | null
+	setPendingShare: (file: PendingShare | null, room_id?: RoomID | null) => void
+	pendingShare: PendingShare | null
 }
 
 const stubContext = {
+	isReal: false,
+
 	get setActiveRoom(): never {
 		throw new Error("MainScreenContext used outside main screen")
 	},
@@ -76,5 +85,8 @@ const stubContext = {
 
 const MainScreenContext = createContext<MainScreenContextFields>(stubContext)
 window.mainScreenContext = stubContext
+window.mainScreenContextWaiter = new Promise<void>((resolve) => {
+	window.mainScreenContextResolve = resolve
+})
 
 export default MainScreenContext
