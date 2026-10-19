@@ -367,16 +367,17 @@ func (h *HiClient) receiptsToList(content *event.ReceiptEventContent) ([]*databa
 }
 
 func (h *HiClient) processSyncInvitedRoom(ctx context.Context, roomID id.RoomID, room *mautrix.SyncInvitedRoom) error {
+	state := room.BestState()
 	ir := &database.InvitedRoom{
 		ID:          roomID,
 		CreatedAt:   jsontime.UnixMilliNow(),
-		InviteState: room.State.Events,
+		InviteState: state,
 	}
 	if len(ir.InviteState) == 0 {
 		zerolog.Ctx(ctx).Warn().Stringer("room_id", roomID).Msg("Got invited room with no state, ignoring")
 		return nil
 	}
-	for _, evt := range room.State.Events {
+	for _, evt := range state {
 		if evt.Type == event.StateMember && evt.GetStateKey() == h.Account.UserID.String() && evt.Timestamp != 0 {
 			ir.CreatedAt = jsontime.UM(time.UnixMilli(evt.Timestamp))
 			break
@@ -1001,7 +1002,7 @@ func (h *HiClient) processStateAndTimeline(
 	decryptionQueue := make(map[id.SessionID]*database.SessionRequest)
 	allNewEvents := make([]*database.Event, 0, len(state.Events)+len(sticky.Events)+len(timeline.Events))
 	addedEvents := make(map[database.EventRowID]int)
-	newNotifications := make([]jsoncmd.SyncNotification, 0)
+	newNotifications := make([]*jsoncmd.SyncNotification, 0)
 	var recalculatePreviewEvent, unreadMessagesWereMaybeRedacted bool
 	var newUnreadCounts database.UnreadCounts
 	addOldEvent := func(rowID database.EventRowID, evtID id.EventID) (dbEvt *database.Event, err error) {
@@ -1057,13 +1058,7 @@ func (h *HiClient) processStateAndTimeline(
 		}
 		if isUnread {
 			if dbEvt.UnreadType.Is(database.UnreadTypeNotify) && h.firstSyncReceived {
-				newNotifications = append(newNotifications, jsoncmd.SyncNotification{
-					RowID:     dbEvt.RowID,
-					Sound:     dbEvt.UnreadType.Is(database.UnreadTypeSound),
-					Highlight: dbEvt.UnreadType.Is(database.UnreadTypeHighlight),
-					Event:     dbEvt,
-					Room:      room,
-				})
+				newNotifications = append(newNotifications, dbEvt.ToSyncNotification(room))
 			}
 			newUnreadCounts.AddOne(dbEvt.UnreadType)
 		}

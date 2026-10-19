@@ -62,7 +62,7 @@ type PushRTCNotification struct {
 // formatForkPushNotification formats pushes for event types that upstream doesn't notify for.
 // handled is false for event types that should go through the upstream formatting.
 func (gmx *Gomuks) formatForkPushNotification(
-	ctx context.Context, notif jsoncmd.SyncNotification, evtType event.Type, rawContent json.RawMessage,
+	ctx context.Context, notif *jsoncmd.SyncNotification, evtType event.Type, rawContent json.RawMessage,
 ) (msg *PushNewMessage, handled bool) {
 	switch evtType {
 	case event.EventReaction:
@@ -82,7 +82,7 @@ func (gmx *Gomuks) formatForkPushNotification(
 // the upstream formatting, so that fork notifications get every field upstream fills (room info,
 // sender, DM flag, etc) without duplicating that code here.
 func (gmx *Gomuks) newForkPushMessage(
-	ctx context.Context, notif jsoncmd.SyncNotification, text string, mention bool,
+	ctx context.Context, notif *jsoncmd.SyncNotification, text string, mention bool,
 ) *PushNewMessage {
 	content, err := json.Marshal(&event.MessageEventContent{MsgType: event.MsgText, Body: text})
 	if err != nil {
@@ -96,8 +96,9 @@ func (gmx *Gomuks) newForkPushMessage(
 	evt.Decrypted = nil
 	evt.DecryptedType = ""
 	evt.LocalContent = &database.LocalContent{PreviewText: text}
-	notif.Event = &evt
-	msg := gmx.formatPushNotificationMessage(ctx, notif)
+	standIn := *notif
+	standIn.Event = &evt
+	msg := gmx.formatPushNotificationMessage(ctx, &standIn)
 	if msg != nil {
 		msg.Mention = mention
 	}
@@ -118,7 +119,7 @@ func reactionKeyForNotification(key string) string {
 	return key
 }
 
-func (gmx *Gomuks) formatReactionNotificationText(ctx context.Context, notif jsoncmd.SyncNotification, rawContent json.RawMessage) string {
+func (gmx *Gomuks) formatReactionNotificationText(ctx context.Context, notif *jsoncmd.SyncNotification, rawContent json.RawMessage) string {
 	var content event.ReactionEventContent
 	err := json.Unmarshal(rawContent, &content)
 	if err != nil {
@@ -202,7 +203,7 @@ func rtcNotificationExpiry(senderTS, lifetime, eventTS int64) (time.Time, bool) 
 	return time.UnixMilli(senderTS + lifetime), true
 }
 
-func (gmx *Gomuks) formatRTCNotification(ctx context.Context, notif jsoncmd.SyncNotification, rawContent json.RawMessage) *PushNewMessage {
+func (gmx *Gomuks) formatRTCNotification(ctx context.Context, notif *jsoncmd.SyncNotification, rawContent json.RawMessage) *PushNewMessage {
 	var content rtcNotificationContent
 	err := json.Unmarshal(rawContent, &content)
 	if err != nil {
