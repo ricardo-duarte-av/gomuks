@@ -14,8 +14,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//go:build !js
-
 package gomuks
 
 // Push notification formatting that only exists in this fork. It's kept out of pushmessage.go
