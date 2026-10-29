@@ -201,6 +201,8 @@ func (h *HiClient) handleJSONCommand(ctx context.Context, req *JSONCommand) (any
 		return jsoncmd.CalculateRoomID.RunCtx(ctx, req.Data, h.API.CalculateRoomID)
 	case jsoncmd.ReqRerequestSession:
 		return jsoncmd.RerequestSession.RunCtx(ctx, req.Data, h.API.RerequestSession)
+	case jsoncmd.ReqGetUnreadHighlights:
+		return jsoncmd.GetUnreadHighlights.RunCtx(ctx, req.Data, h.API.GetUnreadHighlights)
 	default:
 		return nil, fmt.Errorf("unknown command %q", req.Command)
 	}

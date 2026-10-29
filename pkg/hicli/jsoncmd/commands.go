@@ -113,6 +113,7 @@ const (
 	ReqGetMediaConfig           Name = "get_media_config"
 	ReqCalculateRoomID          Name = "calculate_room_id"
 	ReqRerequestSession         Name = "rerequest_session"
+	ReqGetUnreadHighlights      Name = "get_unread_highlights"
 
 	ReqRTCLivekitGetToken             Name = "rtc_livekit_get_token"
 	ReqRTCLivekitDelegateDelayedLeave Name = "rtc_livekit_delegate_delayed_leave"
@@ -353,6 +354,8 @@ var (
 	CalculateRoomID = &CommandSpec[*CalculateRoomIDParams, id.RoomID]{Name: ReqCalculateRoomID}
 	// RerequestSession re-requests a given Megolm session from the key backup and from other devices.
 	RerequestSession = &CommandSpecWithoutResponse[*RerequestSessionParams]{Name: ReqRerequestSession}
+	// GetUnreadHighlights returns the total number of unread highlights (mentions) across all joined rooms.
+	GetUnreadHighlights = &CommandSpecWithoutRequest[int]{Name: ReqGetUnreadHighlights}
 )
 
 // FFI-specific command specs
@@ -482,6 +485,7 @@ var AllNames = []Name{
 	ReqGetMediaConfig,
 	ReqCalculateRoomID,
 	ReqRerequestSession,
+	ReqGetUnreadHighlights,
 	ReqGetAccountInfo,
 	ReqUploadMedia,
 	ReqDownloadMedia,
