@@ -421,6 +421,12 @@ func (h *HiClient) withEventDecryptionLock(ctx context.Context, sessID id.Sessio
 	if ctx.Value(eventDecryptionLockContextKey) != nil {
 		return fn(ctx)
 	}
+	if sessID != "" && !storeOnly && ctx.Value(syncContextKey) != nil {
+		zerolog.Ctx(ctx).Warn().
+			Stringer("megolm_session_id", sessID).
+			Bool("store_only", storeOnly).
+			Msg("Acquiring event decryption lock during sync")
+	}
 	start := time.Now()
 	h.eventDecryptionLock.Lock()
 	defer h.eventDecryptionLock.Unlock()
@@ -502,6 +508,26 @@ func (h *HiClient) ResumeSync() {
 	if wasPaused && h.IsLoggedIn() && h.VerificationState.IsVerified {
 		go h.Sync()
 	}
+}
+
+func (h *HiClient) ResetNetworkConnections() {
+	if h.Client.RequestRetryTrigger == nil {
+		h.Log.Warn().Msg("ResetNetworkConnections called without RequestRetryTrigger being set")
+		return
+	}
+	transportClone := h.Client.Client.Transport.(*http.Transport).Clone()
+	h.Client.Client = &http.Client{
+		Transport: transportClone,
+		Timeout:   h.Client.Client.Timeout,
+	}
+	if h.firstSyncReceived {
+		transportClone.ResponseHeaderTimeout = h.RequestTimeout
+		h.Client.Client.Timeout = 3 * h.RequestTimeout
+	} else {
+		transportClone.ResponseHeaderTimeout = 300 * time.Second
+		h.Client.Client.Timeout = 300 * time.Second
+	}
+	h.Client.RequestRetryTrigger.Notify()
 }
 
 func (h *HiClient) Stop() {

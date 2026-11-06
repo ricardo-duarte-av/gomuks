@@ -47,8 +47,9 @@ type MatrixConfig struct {
 	DisableHTTP2 bool            `yaml:"disable_http2"`
 	SetPresence  *event.Presence `yaml:"set_presence"`
 
-	InitSyncTimeout time.Duration `yaml:"init_sync_timeout"`
-	RequestTimeout  time.Duration `yaml:"request_timeout"`
+	InitSyncTimeout   time.Duration `yaml:"init_sync_timeout"`
+	RequestTimeout    time.Duration `yaml:"request_timeout"`
+	ResettableNetwork bool          `yaml:"resettable_network"`
 
 	InitialDeviceDisplayName string `yaml:"initial_device_display_name"`
 }
@@ -61,7 +62,8 @@ type PushConfig struct {
 }
 
 type MediaConfig struct {
-	ThumbnailSize int `yaml:"thumbnail_size"`
+	ThumbnailSize int  `yaml:"thumbnail_size"`
+	SharedCache   bool `yaml:"shared_cache"`
 }
 
 type WebConfig struct {
