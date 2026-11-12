@@ -21,11 +21,13 @@ import (
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/crypto/ssss"
 	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/event/cmdschema"
 	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/id"
 	"maunium.net/go/mautrix/oauth"
 	"maunium.net/go/mautrix/pushrules"
 
+	"go.mau.fi/gomuks/pkg/hicli/cmdspec"
 	"go.mau.fi/gomuks/pkg/hicli/database"
 	"go.mau.fi/gomuks/pkg/hicli/jsoncmd"
 )
@@ -147,6 +149,8 @@ func (h *HiClient) handleJSONCommand(ctx context.Context, req *JSONCommand) (any
 		return jsoncmd.PublishRoom.RunCtx(ctx, req.Data, h.API.PublishRoom)
 	case jsoncmd.ReqGetRoomVisibility:
 		return jsoncmd.GetRoomVisibility.RunCtx(ctx, req.Data, h.API.GetRoomVisibility)
+	case jsoncmd.ReqUpgradeRoom:
+		return jsoncmd.UpgradeRoom.RunCtx(ctx, req.Data, h.API.UpgradeRoom)
 	case jsoncmd.ReqRequestOpenIDToken:
 		return jsoncmd.RequestOpenIDToken.RunCtx(ctx, req.Data, h.API.RequestOpenIDToken)
 	case jsoncmd.ReqLogout:
@@ -203,6 +207,8 @@ func (h *HiClient) handleJSONCommand(ctx context.Context, req *JSONCommand) (any
 		return jsoncmd.RerequestSession.RunCtx(ctx, req.Data, h.API.RerequestSession)
 	case jsoncmd.ReqGetUnreadHighlights:
 		return jsoncmd.GetUnreadHighlights.RunCtx(ctx, req.Data, h.API.GetUnreadHighlights)
+	case jsoncmd.ReqGetCommandDefinitions:
+		return jsoncmd.GetCommandDefinitions.RunCtx(ctx, req.Data, h.API.GetCommandDefinitions)
 	default:
 		return nil, fmt.Errorf("unknown command %q", req.Command)
 	}
@@ -588,6 +594,10 @@ func (h *JSONAPI) GetRoomVisibility(ctx context.Context, params *jsoncmd.GetRoom
 	return &jsoncmd.RoomVisibilityResponse{Visibility: vis}, err
 }
 
+func (h *JSONAPI) UpgradeRoom(ctx context.Context, params *jsoncmd.UpgradeRoomParams) (*mautrix.RespUpgradeRoom, error) {
+	return h.Client.UpgradeRoom(ctx, params.RoomID, params.ReqUpgradeRoom)
+}
+
 func (h *JSONAPI) DeleteAlias(ctx context.Context, params *jsoncmd.DeleteAliasParams) error {
 	_, err := h.Client.DeleteAlias(ctx, params.Alias)
 	return err
@@ -805,6 +815,10 @@ func (h *JSONAPI) GetMediaConfig(ctx context.Context) (*mautrix.RespMediaConfig,
 
 func (h *JSONAPI) CalculateRoomID(ctx context.Context, params *jsoncmd.CalculateRoomIDParams) (id.RoomID, error) {
 	return h.HiClient.CalculateRoomID(params.Timestamp, params.CreationContent)
+}
+
+func (h *JSONAPI) GetCommandDefinitions(ctx context.Context) ([]*cmdschema.EventContent, error) {
+	return cmdspec.CommandDefinitions, nil
 }
 
 func (h *JSONAPI) RerequestSession(ctx context.Context, params *jsoncmd.RerequestSessionParams) error {
