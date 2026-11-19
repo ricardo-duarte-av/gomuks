@@ -49,6 +49,7 @@ type PushNotification struct {
 	Dismiss         []PushDismiss          `json:"dismiss,omitempty"`
 	OrigMessages    []*PushNewMessage      `json:"-"`
 	RawMessages     []json.RawMessage      `json:"messages,omitempty"`
+	RawInvites      []json.RawMessage      `json:"invites,omitempty"`
 	ImageAuth       jsoncmd.ImageAuthToken `json:"image_auth,omitempty"`
 	ImageAuthExpiry *jsontime.UnixMilli    `json:"image_auth_expiry,omitempty"`
 	HasImportant    bool                   `json:"-"`
@@ -129,27 +130,31 @@ func (gmx *Gomuks) SendPushNotifications(sync *jsoncmd.SyncComplete) {
 			push.OrigMessages = append(push.OrigMessages, msg)
 		}
 	}
-	if len(push.Dismiss) == 0 && len(push.RawMessages) == 0 {
-		return
-	}
 	if ctx == nil {
 		ctx = gmx.Log.With().
 			Str("action", "send push notification").
 			Logger().WithContext(context.Background())
+	}
+	gmx.addForkInvitePushes(ctx, sync, &push)
+	if len(push.Dismiss) == 0 && len(push.RawMessages) == 0 && len(push.RawInvites) == 0 {
+		return
 	}
 	pushRegs, err := gmx.Client.DB.PushRegistration.GetAll(ctx)
 	if err != nil {
 		zerolog.Ctx(ctx).Err(err).Msg("Failed to get push registrations")
 		return
 	}
-	if len(push.RawMessages) > 0 {
+	if len(push.RawMessages) > 0 || len(push.RawInvites) > 0 {
 		exp := time.Now().Add(24 * time.Hour)
 		push.ImageAuth = gmx.generateImageToken(24 * time.Hour)
 		push.ImageAuthExpiry = ptr.Ptr(jsontime.UM(exp))
 	}
-	for notif := range push.Split {
-		gmx.SendPushNotification(ctx, pushRegs, notif)
+	if len(push.Dismiss) > 0 || len(push.RawMessages) > 0 {
+		for notif := range push.Split {
+			gmx.SendPushNotification(ctx, pushRegs, notif)
+		}
 	}
+	gmx.sendForkInvitePushes(ctx, pushRegs, &push)
 }
 
 func emitDesktopPush(notif PushNewMessage) {
@@ -229,6 +234,7 @@ func (gmx *Gomuks) SendPushNotification(ctx context.Context, pushRegs []*databas
 		Bool("important", notif.HasImportant).
 		Int("message_count", len(notif.RawMessages)).
 		Int("dismiss_count", len(notif.Dismiss)).
+		Int("invite_count", len(notif.RawInvites)).
 		Logger()
 	ctx = log.WithContext(ctx)
 	rawPayload, err := json.Marshal(notif)
