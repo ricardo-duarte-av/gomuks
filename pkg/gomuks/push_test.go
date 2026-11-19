@@ -130,3 +130,15 @@ func TestPushNotificationSplit_DismissesWithoutMessages(t *testing.T) {
 		t.Errorf("expected each dismissal exactly once in order, got %d dismissals", len(gotDismisses))
 	}
 }
+
+func TestPushNotificationSplit_SilentMessageIsImportant(t *testing.T) {
+	// No sound tweak (e.g. an @room whose push rule only notifies): still high priority.
+	raw, orig := makeMessages(1, 10)
+	chunks := collectSplit(&PushNotification{RawMessages: raw, OrigMessages: orig})
+	if len(chunks) != 1 {
+		t.Fatalf("expected 1 push, got %d", len(chunks))
+	}
+	if !chunks[0].HasImportant {
+		t.Error("expected a push with a message to be marked important")
+	}
+}

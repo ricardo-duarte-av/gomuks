@@ -39,8 +39,13 @@ import (
 )
 
 // isImportant returns whether the notification should be delivered at high priority.
+//
+// Every message is: each one becomes a visible notification on the device (FCM's condition for
+// high priority), and the client may alert for more than the push rules' sound tweak (an @room
+// whose rule only notifies, a DM). At normal priority, Doze holds such a push until the device
+// wakes, so the notification (and its sound) arrives late.
 func (pnm *PushNewMessage) isImportant() bool {
-	return pnm.Sound || (pnm.RTC != nil && pnm.RTC.Type == rtcNotificationTypeRing)
+	return true
 }
 
 // PushRTCNotification is the call metadata included in pushes for MSC4075 RTC notifications.
