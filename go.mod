@@ -64,3 +64,5 @@ require (
 	golang.org/x/term v0.48.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )
+
+replace github.com/mattn/go-sqlite3 => github.com/mattn/go-sqlite3 v1.14.52
